@@ -1,17 +1,30 @@
 // GEOSCAN FleetCommander AI - Frontend Application
 // Dialog Design System Light Theme
 const DEFAULT_REMOTE_API = "https://84.201.161.204.sslip.io";
-const API_BASE = (() => {
-  const saved = localStorage.getItem("geoscan_api_url");
-  if (saved) return saved.replace(/\/+$/, "");
-  if (window.location.hostname.endsWith("github.io")) {
+
+function getResolvedApiBase() {
+  let saved = localStorage.getItem("geoscan_api_url");
+  // Clean up any outdated raw IP address that would cause ERR_CERT_COMMON_NAME_INVALID
+  if (saved && (saved.includes("84.201.161.204") && !saved.includes("sslip.io"))) {
+    localStorage.removeItem("geoscan_api_url");
+    saved = null;
+  }
+  if (saved && saved.trim()) {
+    return saved.trim().replace(/\/+$/, "");
+  }
+  if (window.location.hostname.endsWith("github.io") || window.location.hostname.includes("sslip.io")) {
+    return DEFAULT_REMOTE_API;
+  }
+  if (window.location.hostname === "84.201.161.204") {
     return DEFAULT_REMOTE_API;
   }
   if (window.location.protocol === "file:" || window.location.port === "5500" || window.location.port === "3000") {
     return "http://localhost:8000";
   }
   return window.location.origin;
-})();
+}
+
+let API_BASE = getResolvedApiBase();
 
 let map;
 let baseLayers = {};
@@ -69,7 +82,7 @@ async function checkApiHealth() {
   if (!pill) return;
   pill.onclick = () => {
     const current = localStorage.getItem("geoscan_api_url") || API_BASE;
-    const nextUrl = prompt("Укажите адрес бэкенд API (например, http://84.201.161.204 или http://localhost:8000):", current);
+    const nextUrl = prompt("Укажите адрес бэкенд API (например, https://84.201.161.204.sslip.io или http://localhost:8000):", current);
     if (nextUrl !== null) {
       if (nextUrl.trim() === "") {
         localStorage.removeItem("geoscan_api_url");
@@ -79,6 +92,8 @@ async function checkApiHealth() {
       window.location.reload();
     }
   };
+
+  let isOk = false;
   try {
     const res = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(4000) });
     if (res.ok) {
@@ -87,10 +102,35 @@ async function checkApiHealth() {
       pill.style.color = "#059669";
       pill.style.borderColor = "#a7f3d0";
       pill.style.background = "#ecfdf5";
-    } else {
-      throw new Error(`HTTP ${res.status}`);
+      isOk = true;
     }
   } catch (err) {
+    console.warn(`Health check failed for ${API_BASE}:`, err);
+  }
+
+  // Automatic recovery fallback to DEFAULT_REMOTE_API if API_BASE failed
+  if (!isOk && API_BASE !== DEFAULT_REMOTE_API) {
+    try {
+      const fbRes = await fetch(`${DEFAULT_REMOTE_API}/api/health`, { signal: AbortSignal.timeout(4000) });
+      if (fbRes.ok) {
+        const data = await fbRes.json();
+        API_BASE = DEFAULT_REMOTE_API;
+        localStorage.setItem("geoscan_api_url", DEFAULT_REMOTE_API);
+        pill.innerHTML = `● API: Онлайн (${data.parcels_count} полигонов)`;
+        pill.style.color = "#059669";
+        pill.style.borderColor = "#a7f3d0";
+        pill.style.background = "#ecfdf5";
+        isOk = true;
+        // Retry initial loading with the restored API
+        loadParcelsList();
+        updatePhotogrammetryPreview();
+      }
+    } catch (fbErr) {
+      console.warn("Fallback to DEFAULT_REMOTE_API also failed:", fbErr);
+    }
+  }
+
+  if (!isOk) {
     pill.innerHTML = `⚠️ API: Офлайн (${API_BASE})`;
     pill.style.color = "#dc2626";
     pill.style.borderColor = "#fecaca";
