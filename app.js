@@ -1,6 +1,6 @@
 // GEOSCAN FleetCommander AI - Frontend Application
 // Dialog Design System Light Theme
-const DEFAULT_REMOTE_API = "http://84.201.161.204";
+const DEFAULT_REMOTE_API = "https://84.201.161.204.sslip.io";
 const API_BASE = (() => {
   const saved = localStorage.getItem("geoscan_api_url");
   if (saved) return saved.replace(/\/+$/, "");
