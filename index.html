@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Geoscan FleetCommander — Сервис планирования БАС</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- Design System CSS -->
+  <link rel="stylesheet" href="variables.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ВЕРХНЯЯ ПЛАВАЮЩАЯ НАВИГАЦИОННАЯ ПАНЕЛЬ-ПИЛЮЛЯ -->
+  <header class="floating-header">
+    <div class="nav-brand">
+      <div class="brand-badge">GEOSCAN</div>
+      <div class="brand-text">
+        <span class="brand-title">FleetCommander</span>
+        <span class="brand-sub">Планирование группы БВС</span>
+      </div>
+    </div>
+
+    <div class="nav-status-pills">
+      <span class="status-pill" id="datasetStats">613 полигонов • 341 зона</span>
+      <span class="status-pill highlight">4D-Airspace Ready</span>
+      <span class="status-pill">WGS-84 / UTM</span>
+    </div>
+
+    <div class="nav-actions">
+      <button class="btn btn-ghost" id="btnFitAll">⛶ Все зоны</button>
+      <button class="btn btn-primary" id="btnCalculate">Сформировать задание</button>
+    </div>
+  </header>
+
+  <!-- КАРТОГРАФИЧЕСКАЯ ПОДЛОЖКА (НА ВЕСЬ ЭКРАН) -->
+  <div id="map"></div>
+
+  <!-- ЛЕВАЯ ПЛАВАЮЩАЯ КАРТОЧКА УПРАВЛЕНИЯ -->
+  <aside class="floating-panel" id="controlPanel">
+    <div class="panel-header">
+      <div class="panel-title-wrap">
+        <h2>Параметры миссии</h2>
+        <p class="panel-subtitle">Настройка территории, флота и оптимизации</p>
+      </div>
+      <button class="panel-toggle-btn" id="btnTogglePanel" title="Свернуть панель">◀</button>
+    </div>
+
+    <!-- ТАБЫ ШАГОВ НАСТРОЙКИ (ИЗБАВЛЯЮТ ОТ КАШИ) -->
+    <div class="tab-switcher">
+      <button class="tab-btn active" data-tab="tab-territory">1. Территория</button>
+      <button class="tab-btn" data-tab="tab-fleet">2. Флот и оптика</button>
+      <button class="tab-btn" data-tab="tab-weather">3. Ветер и цель</button>
+    </div>
+
+    <!-- ВКЛАДКА 1: ТЕРРИТОРИЯ И ОГРАНИЧЕНИЯ -->
+    <div class="tab-content active" id="tab-territory">
+      <div class="control-section">
+        <label class="section-label">Участок из «Границы полетов.kml»</label>
+        <div class="select-group">
+          <select id="parcelSelect" class="styled-select">
+            <option value="">Загрузка полигонов...</option>
+          </select>
+          <button class="btn-icon" id="btnRefreshParcels" title="Обновить список">↻</button>
+        </div>
+        <div class="helper-text" id="parcelInfoHint">Площадь участка: —</div>
+      </div>
+
+      <div class="divider-line">
+        <span>или</span>
+      </div>
+
+      <div class="control-section">
+        <button class="btn btn-ghost btn-block" id="btnDrawCustom">
+          ✏️ Нарисовать свой полигон на карте
+        </button>
+      </div>
+
+      <div class="control-section mt-24">
+        <label class="section-label">Слои ограничений воздушного пространства</label>
+        <div class="checkbox-list">
+          <label class="checkbox-row">
+            <input type="checkbox" id="toggleZones" checked>
+            <div class="checkbox-text">
+              <strong>Зоны ограничений ВП («Московская зона.kml»)</strong>
+              <span>Включая 4D эшелоны FL, AGL/AMSL и временные окна</span>
+            </div>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="toggleObstacles" checked>
+            <div class="checkbox-text">
+              <strong>3D-препятствия («obstacles_Московская обл.kml»)</strong>
+              <span>5 162 вышки и мачты связи с буфером безопасности 70 м</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="tab-footer">
+        <button class="btn btn-secondary btn-block next-tab-btn" data-target="tab-fleet">Далее: Выбор флота ➔</button>
+      </div>
+    </div>
+
+    <!-- ВКЛАДКА 2: ФЛОТ БВС И ОПТИКА -->
+    <div class="tab-content" id="tab-fleet">
+      <div class="control-section">
+        <label class="section-label">Полезная нагрузка (Сенсор)</label>
+        <select id="sensorSelect" class="styled-select">
+          <option value="sony_rx1r2" selected>Sony RX1R II (42.4 Мп full-frame RGB)</option>
+          <option value="sony_a6000">Sony A6000 (24.3 Мп APS-C RGB)</option>
+          <option value="lidar_agm_ms3">LiDAR АГМ-МС3 (Лазерный сканер)</option>
+          <option value="multispectral">MicaSense RedEdge-P (Мультиспектр 5 каналов)</option>
+          <option value="thermal">FLIR Vue Pro R (Тепловизор ИК)</option>
+          <option value="geophysics_mag">Квантовый магнитометр (Геофизика)</option>
+          <option value="rgb_and_lidar">✨ Комплекс: RGB (Sony RX1R II) + LiDAR (АГМ-МС3)</option>
+        </select>
+      </div>
+
+      <div class="control-section">
+        <div class="slider-header">
+          <label class="section-label">Целевое разрешение (GSD)</label>
+          <strong class="slider-badge" id="gsdValue">3.0 см/пикс</strong>
+        </div>
+        <input type="range" id="gsdSlider" min="1.0" max="10.0" step="0.5" value="3.0" class="styled-range">
+      </div>
+
+      <!-- Фотограмметрическая плашка -->
+      <div class="preview-metrics-box">
+        <div class="preview-col">
+          <span>Высота H (AGL)</span>
+          <strong id="calcHeight">185.0 м</strong>
+        </div>
+        <div class="preview-col">
+          <span>Шаг галсов</span>
+          <strong id="calcSpacing">66.5 м</strong>
+        </div>
+        <div class="preview-col">
+          <span>Базис кадра</span>
+          <strong id="calcTrigger">31.8 м</strong>
+        </div>
+        <div class="preview-col">
+          <span>Макс. скорость</span>
+          <strong id="calcMaxSpeed">15.0 м/с</strong>
+        </div>
+      </div>
+
+      <!-- Информационные плашки совместимости и нормативов -->
+      <div id="droneCompatNotice" class="drone-compat-box" style="display:none;"></div>
+      <div id="regulatoryWarningBox" class="regulatory-alert-box" style="display:none;"></div>
+
+      <div class="control-section mt-16">
+        <label class="section-label">Доступный флот БВС Геоскан</label>
+        <div class="drones-selection-list">
+          
+          <label class="drone-select-card" for="drone_201" id="card_drone_201">
+            <input type="checkbox" id="drone_201" checked>
+            <div class="drone-card-body">
+              <div class="drone-header">
+                <strong>Геоскан 201</strong>
+                <span class="pill-tag tag-wing">КРЫЛО / САМОЛЕТ</span>
+              </div>
+              <div class="drone-desc">75 км/ч • Виражи Дубинса (85м) • Парашют • H ≥ 90м</div>
+              <div class="drone-battery-pill">Батарея: 100% (до 180 мин) • ТО: каждые 80 полетов</div>
+            </div>
+          </label>
+
+          <label class="drone-select-card" for="drone_gemini" id="card_drone_gemini">
+            <input type="checkbox" id="drone_gemini" checked>
+            <div class="drone-card-body">
+              <div class="drone-header">
+                <strong>Геоскан Gemini</strong>
+                <span class="pill-tag tag-vtol">КОПТЕР</span>
+              </div>
+              <div class="drone-desc">50 км/ч • Точная АФС • VTOL • H ≥ 30м</div>
+              <div class="drone-battery-pill">Батарея: 100% (до 45 мин) • ТО: каждые 120 ч</div>
+            </div>
+          </label>
+
+          <label class="drone-select-card" for="drone_801" id="card_drone_801">
+            <input type="checkbox" id="drone_801">
+            <div class="drone-card-body">
+              <div class="drone-header">
+                <strong>Геоскан 801</strong>
+                <span class="pill-tag tag-heavy">ТЯЖЕЛЫЙ БВС</span>
+              </div>
+              <div class="drone-desc">43 км/ч • LiDAR / Геофизика • VTOL • H ≥ 25м</div>
+              <div class="drone-battery-pill">Батарея: 100% (до 40 мин) • ТО: каждые 160 ч</div>
+            </div>
+          </label>
+
+        </div>
+      </div>
+
+      <div class="tab-footer">
+        <button class="btn btn-secondary btn-block next-tab-btn" data-target="tab-weather">Далее: Ветер и расчет ➔</button>
+      </div>
+    </div>
+
+    <!-- ВКЛАДКА 3: ВЕТЕР И КРИТЕРИЙ ОПТИМИЗАЦИИ -->
+    <div class="tab-content" id="tab-weather">
+      <div class="control-section">
+        <div class="slider-header">
+          <label class="section-label">Скорость ветра</label>
+          <strong class="slider-badge" id="windSpeedVal">6.0 м/с</strong>
+        </div>
+        <input type="range" id="windSpeedSlider" min="0.0" max="15.0" step="0.5" value="6.0" class="styled-range">
+      </div>
+
+      <div class="control-section">
+        <div class="slider-header">
+          <label class="section-label">Направление ветра (Азимут)</label>
+          <strong class="slider-badge" id="windDirVal">120° (ЮВ)</strong>
+        </div>
+        <input type="range" id="windDirSlider" min="0" max="359" step="5" value="120" class="styled-range">
+      </div>
+
+      <!-- Визуальный компас направления ветра -->
+      <div class="weather-callout">
+        <div class="compass-disc" id="windCompassDisc" title="Направление ветра">
+          <span class="compass-n-label">N</span>
+          <div class="compass-arrow-wrap" id="windCompassArrow">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+              <path d="M12 2L5.5 10H9.5V21.5H14.5V10H18.5L12 2Z"/>
+            </svg>
+          </div>
+        </div>
+        <div class="weather-text">
+          <strong>Аэродинамический расчет ветра</strong>
+          <p id="weatherCalloutText">При умеренном ветре (≤5 м/с) галсы автоматически ориентируются вдоль длины полигона для сокращения виражей. При сильном ветре (>8 м/с) учитывается снос камеры.</p>
+        </div>
+      </div>
+
+      <!-- ВЫБОР ОРИЕНТАЦИИ ГАЛСОВ -->
+      <div class="control-section mt-16">
+        <div class="slider-header" style="margin-bottom:6px;">
+          <label class="section-label">Ориентация галсов съемки</label>
+          <span class="badge badge-success" id="angleModeBadge" style="font-size:10px;">Авто (Оптимум)</span>
+        </div>
+        <div style="display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 4px; margin-bottom: 8px;">
+          <button type="button" class="btn btn-ghost angle-preset-btn active" id="btnAngleAuto" style="font-size:11px; padding:6px 2px; font-weight:600;">✨ Авто (Оптимум)</button>
+          <button type="button" class="btn btn-ghost angle-preset-btn" id="btnAngleAxis" style="font-size:11px; padding:6px 2px;">Вдоль поля</button>
+          <button type="button" class="btn btn-ghost angle-preset-btn" id="btnAngleWind" style="font-size:11px; padding:6px 2px;">По ветру</button>
+          <button type="button" class="btn btn-ghost angle-preset-btn" id="btnAngleManual" style="font-size:11px; padding:6px 2px;">Ручной</button>
+        </div>
+        <div id="manualAngleBlock" style="display:none; background:var(--color-fog); padding:8px 10px; border-radius:6px; border:1px solid rgba(24,24,37,0.08);">
+          <div class="slider-header" style="margin-bottom:4px;">
+            <span style="font-size:11px; color:var(--color-stone);">Азимут галсов:</span>
+            <strong class="slider-badge" id="manualAngleVal">120°</strong>
+          </div>
+          <input type="range" id="manualAngleSlider" min="0" max="180" step="1" value="120" class="styled-range">
+        </div>
+      </div>
+
+      <div class="control-section mt-24">
+        <label class="section-label">Критерий оптимизации миссии</label>
+        <div class="criterion-radios">
+          <label class="radio-pill-card">
+            <input type="radio" name="optCriterion" value="min_makespan" checked>
+            <div class="radio-card-body">
+              <strong>Минимизация общего времени (Makespan)</strong>
+              <p>Параллельный вылет группы БВС с разделением площади под их скорость.</p>
+            </div>
+          </label>
+
+          <label class="radio-pill-card">
+            <input type="radio" name="optCriterion" value="min_flight_time">
+            <div class="radio-card-body">
+              <strong>Минимизация суммарного налета флота</strong>
+              <p>Экономия ресурса техники и батарей: предпочтение отдается крылу Геоскан 201.</p>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- ОПЕРАТИВНЫЕ ОГРАНИЧЕНИЯ И ТЭО (Аналитика для заказчика) -->
+      <div class="control-section mt-16">
+        <label class="section-label">Оперативные ограничения и ТЭО</label>
+        <div class="constraints-grid">
+          <div class="constraint-field">
+            <span class="constraint-label">Лимит времени (мин)</span>
+            <input type="number" id="maxTimeLimitInput" placeholder="Без лимита" min="5" max="600" step="5" class="styled-input">
+          </div>
+          <div class="constraint-field">
+            <span class="constraint-label">Лимит бортов</span>
+            <input type="number" id="maxDronesLimitInput" placeholder="Все" min="1" max="5" step="1" class="styled-input">
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer">
+        <button class="btn btn-primary btn-block" id="btnCalculateTab">
+          ⚡ Сформировать полетное задание
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ИНДИКАТОР ВЕТРА НА КАРТЕ (ПРАВЫЙ ВЕРХНИЙ УГОЛ) -->
+  <div class="map-floating-wind" id="mapWindBadge">
+    <div class="wind-arrow-mini" id="mapWindArrow">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+        <path d="M12 2L5.5 10H9.5V21.5H14.5V10H18.5L12 2Z"/>
+      </svg>
+    </div>
+    <div class="wind-info-mini">
+      <span class="wind-speed" id="mapWindSpeed">6.0 м/с</span>
+      <span class="wind-dir" id="mapWindDir">120° ЮВ</span>
+    </div>
+  </div>
+
+  <!-- ЛЕГЕНДА МАРШРУТОВ (ЛЕВЫЙ НИЖНИЙ УГОЛ) -->
+  <div class="map-floating-legend" id="mapLegend" style="display: none;">
+    <div class="legend-title">Траектории БВС</div>
+    <div id="legendItems"></div>
+  </div>
+
+  <!-- НИЖНЯЯ ПЛАВАЮЩАЯ КАРТОЧКА РЕЗУЛЬТАТОВ И 4D ПЛЕЕРА -->
+  <div class="floating-results-card" id="statsRibbon" style="display: none;">
+    <!-- ПРЕДУПРЕЖДЕНИЕ О НОРМАТИВАХ / АВТОЗАМЕНЕ БВС -->
+    <div id="resultsAlertBanner" class="result-warning-banner" style="display: none;"></div>
+    
+    <!-- ВЕРХНИЙ РЯД: СВОДНЫЕ ЦИФРЫ И ЭКСПОРТ -->
+    <div class="results-summary-row">
+      <div class="metric-item">
+        <span class="metric-caption">ПЛОЩАДЬ</span>
+        <strong class="metric-number" id="statArea">—</strong>
+      </div>
+      <div class="metric-item highlight-orange">
+        <span class="metric-caption">ОБЩЕЕ ВРЕМЯ (MAKESPAN)</span>
+        <strong class="metric-number" id="statMakespan">—</strong>
+      </div>
+      <div class="metric-item">
+        <span class="metric-caption">НАЛЕТ ФЛОТА</span>
+        <strong class="metric-number" id="statDistance">—</strong>
+      </div>
+      <div class="metric-item">
+        <span class="metric-caption">ГАЛСОВ</span>
+        <strong class="metric-number" id="statSwaths">—</strong>
+      </div>
+      <div class="metric-item">
+        <span class="metric-caption">БОРТОВ</span>
+        <strong class="metric-number" id="statDronesCount">—</strong>
+      </div>
+
+      <!-- КНОПКИ ЭКСПОРТА (ПИЛЮЛИ) -->
+      <div class="export-actions">
+        <button class="btn btn-ghost" id="btnExportKml">Экспорт KML</button>
+        <button class="btn btn-ghost" id="btnExportGeoJson">GeoJSON</button>
+        <button class="btn btn-ghost btn-plan" id="btnExportPlan">.plan (QGC/Geoscan)</button>
+      </div>
+    </div>
+
+    <!-- БЛОК ТЭО И АНАЛИТИКИ ЭКСПЕРТА (ОТВЕТ НА ТРЕБОВАНИЯ ГЕОСКАНА) -->
+    <div class="feasibility-ribbon-card" id="feasibilityCard" style="display: none;">
+      <div class="feasibility-header-line">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-weight: 600; color: var(--color-midnight-ink); font-size: 11.5px;">ТЭО и Оценка выполнимости:</span>
+          <span class="feasibility-badge" id="feasibilityBadge">ВЫПОЛНИМО</span>
+        </div>
+        <div id="obstacleCountChip" style="font-size: 11px; color: var(--color-stone);"></div>
+      </div>
+      
+      <div class="advisor-text-box" id="advisorSummaryText"></div>
+
+      <div class="scenarios-grid" id="scenariosGrid">
+        <!-- Сравнение сценариев 1 борт vs флот -->
+      </div>
+
+      <div id="obstacleAlertBox" style="margin-top: 8px; display: none;"></div>
+    </div>
+
+    <!-- НИЖНИЙ РЯД: 4D TIME-LAPSE ПЛЕЕР -->
+    <div class="results-player-row">
+      <div class="player-controls">
+        <button class="player-btn" id="btnPlayPause">▶</button>
+        <button class="player-btn" id="btnResetTime">↺</button>
+        <div class="player-time-display">
+          <span id="simCurrentTime">00:00</span>
+          <span class="time-slash">/</span>
+          <span id="simTotalTime">00:00</span>
+        </div>
+      </div>
+
+      <div class="player-timeline">
+        <input type="range" id="timeSlider" min="0" max="1000" value="0" class="player-slider">
+      </div>
+
+      <div class="drone-status-chips" id="droneLiveStatuses">
+        <!-- Индикаторы активных бортов -->
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Leaflet & Draw JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

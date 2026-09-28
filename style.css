@@ -1,0 +1,1090 @@
+@import url('variables.css');
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-inter);
+  background-color: var(--color-fog);
+  color: var(--color-midnight-ink);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  position: relative;
+  letter-spacing: -0.015em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ==========================================================================
+   1. КАРТА (ФОНОВЫЙ ХОЛСТ НА ВЕСЬ ЭКРАН)
+   ========================================================================== */
+#map {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+  background-color: var(--color-fog);
+}
+
+/* Стилизация контролов Leaflet под дизайн-систему */
+.leaflet-bar {
+  border: none !important;
+  box-shadow: var(--shadow-subtle) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+}
+
+.leaflet-bar a {
+  background-color: var(--color-snow) !important;
+  color: var(--color-midnight-ink) !important;
+  border-bottom: 1px solid rgba(24, 24, 37, 0.08) !important;
+  width: 34px !important;
+  height: 34px !important;
+  line-height: 34px !important;
+  font-size: 14px !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: var(--color-fog) !important;
+}
+
+/* ==========================================================================
+   2. ПЛАВАЮЩИЙ ХЕДЕР-ПИЛЮЛЯ (FLOATING HEADER)
+   ========================================================================== */
+.floating-header {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  right: 20px;
+  height: 56px;
+  background-color: var(--color-snow);
+  border-radius: var(--radius-overlays);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px 0 20px;
+  z-index: 1000;
+  border: 1px solid rgba(24, 24, 37, 0.06);
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-badge {
+  background-color: var(--color-midnight-ink);
+  color: var(--color-snow);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  padding: 4px 10px;
+  border-radius: var(--radius-badges);
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-carbon);
+  letter-spacing: -0.02em;
+}
+
+.brand-sub {
+  font-size: 11px;
+  color: var(--color-stone);
+}
+
+.nav-status-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-pill {
+  background-color: var(--color-fog);
+  border: 1px solid rgba(24, 24, 37, 0.08);
+  color: var(--color-graphite);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: var(--radius-badges);
+}
+
+.status-pill.highlight {
+  background-color: rgba(246, 146, 81, 0.12);
+  border-color: rgba(246, 146, 81, 0.3);
+  color: #c06528;
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ==========================================================================
+   3. КНОПКИ (BUTTONS) — СТРОГО ПО DIALOG DESIGN SYSTEM
+   ========================================================================== */
+.btn {
+  font-family: var(--font-inter);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-buttons);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+/* Главная оранжевая кнопка-пилюля */
+.btn-primary {
+  background-color: var(--color-tangerine-tag);
+  color: #000000;
+  border: none;
+  padding: 10px 22px;
+  box-shadow: var(--shadow-pill);
+}
+
+.btn-primary:hover {
+  background-color: #f7a066;
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+/* Вторичная белая кнопка-пилюля (Ghost) */
+.btn-ghost {
+  background-color: var(--color-snow);
+  color: var(--color-midnight-ink);
+  border: 1px solid rgba(24, 24, 37, 0.12);
+  padding: 9px 18px;
+}
+
+.btn-ghost:hover {
+  background-color: var(--color-fog);
+  border-color: rgba(24, 24, 37, 0.2);
+}
+
+.btn-secondary {
+  background-color: var(--color-fog);
+  color: var(--color-midnight-ink);
+  border: 1px solid rgba(24, 24, 37, 0.08);
+  padding: 10px 18px;
+}
+
+.btn-secondary:hover {
+  background-color: #ebebeb;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-icon {
+  background-color: var(--color-snow);
+  border: 1px solid rgba(24, 24, 37, 0.12);
+  color: var(--color-midnight-ink);
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-small);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.btn-icon:hover {
+  background-color: var(--color-fog);
+}
+
+/* ==========================================================================
+   4. ЛЕВАЯ ПЛАВАЮЩАЯ КАРТОЧКА УПРАВЛЕНИЯ (CONTROL PANEL)
+   ========================================================================== */
+.floating-panel {
+  position: absolute;
+  top: 84px;
+  left: 20px;
+  width: 420px;
+  max-height: calc(100vh - 108px);
+  background-color: var(--color-snow);
+  border-radius: var(--radius-cards);
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(24, 24, 37, 0.06);
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+}
+
+.floating-panel.collapsed {
+  transform: translateX(-440px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.panel-header {
+  padding: 20px 24px 14px 24px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.panel-title-wrap h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-carbon);
+  letter-spacing: -0.02em;
+}
+
+.panel-subtitle {
+  font-size: 12px;
+  color: var(--color-stone);
+  margin-top: 2px;
+}
+
+.panel-toggle-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-pebble);
+  cursor: pointer;
+  padding: 4px;
+  font-size: 14px;
+  border-radius: var(--radius-small);
+}
+
+.panel-toggle-btn:hover {
+  color: var(--color-midnight-ink);
+  background-color: var(--color-fog);
+}
+
+/* ПЕРЕКЛЮЧАТЕЛЬ ТАБОВ (ШАГОВ) */
+.tab-switcher {
+  display: flex;
+  background-color: var(--color-fog);
+  border-radius: var(--radius-badges);
+  padding: 3px;
+  margin: 0 24px 16px 24px;
+  border: 1px solid rgba(24, 24, 37, 0.05);
+}
+
+.tab-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 7px 10px;
+  border-radius: var(--radius-badges);
+  font-family: var(--font-inter);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-stone);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tab-btn.active {
+  background-color: var(--color-snow);
+  color: var(--color-carbon);
+  font-weight: 600;
+  box-shadow: var(--shadow-subtle);
+}
+
+/* ТЕЛО ВКЛАДКИ */
+.tab-content {
+  display: none;
+  padding: 0 24px 24px 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tab-content.active {
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-content::-webkit-scrollbar {
+  width: 4px;
+}
+.tab-content::-webkit-scrollbar-thumb {
+  background-color: var(--color-pebble);
+  border-radius: 2px;
+}
+
+.control-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.section-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-carbon);
+}
+
+.select-group {
+  display: flex;
+  gap: 8px;
+}
+
+.styled-select {
+  flex: 1;
+  background-color: var(--color-fog);
+  border: 1px solid rgba(24, 24, 37, 0.12);
+  color: var(--color-midnight-ink);
+  font-family: var(--font-inter);
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: var(--radius-inputs);
+  outline: none;
+  height: 38px;
+}
+
+.styled-select:focus {
+  border-color: var(--color-midnight-ink);
+  background-color: var(--color-snow);
+}
+
+.helper-text {
+  font-size: 11px;
+  color: var(--color-stone);
+  font-family: var(--font-mono);
+}
+
+.divider-line {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 12px 0;
+  color: var(--color-pebble);
+  font-size: 11px;
+}
+
+.divider-line::before, .divider-line::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid rgba(24, 24, 37, 0.08);
+}
+
+.divider-line span {
+  padding: 0 10px;
+}
+
+/* СЛАЙДЕРЫ */
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.slider-badge {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-midnight-ink);
+  background-color: var(--color-fog);
+  padding: 2px 8px;
+  border-radius: var(--radius-badges);
+  border: 1px solid rgba(24, 24, 37, 0.08);
+}
+
+.styled-range {
+  width: 100%;
+  accent-color: var(--color-tangerine-tag);
+  cursor: pointer;
+  height: 4px;
+}
+
+/* ФОТОГРАММЕТРИЧЕСКАЯ ПЛАШКА */
+.preview-metrics-box {
+  background-color: var(--color-fog);
+  border-radius: var(--radius-cardinner);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(24, 24, 37, 0.05);
+}
+
+.preview-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-col span {
+  font-size: 11px;
+  color: var(--color-stone);
+}
+
+.preview-col strong {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--color-carbon);
+  margin-top: 2px;
+}
+
+/* СПИСОК БВС */
+.drones-selection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drone-select-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background-color: var(--color-fog);
+  border: 1px solid rgba(24, 24, 37, 0.08);
+  border-radius: var(--radius-cardinner);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.drone-select-card:hover {
+  background-color: #ebebeb;
+}
+
+.drone-select-card input[type="checkbox"] {
+  accent-color: var(--color-tangerine-tag);
+  margin-top: 3px;
+}
+
+.drone-card-incompatible {
+  opacity: 0.45;
+  background-color: #f1f1f3 !important;
+  border-color: rgba(24, 24, 37, 0.05) !important;
+  cursor: not-allowed !important;
+}
+
+.incompat-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #dc2626;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-top: 4px;
+  width: fit-content;
+}
+
+.drone-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drone-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drone-header strong {
+  font-size: 13px;
+  color: var(--color-carbon);
+}
+
+.pill-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-badges);
+}
+
+.tag-wing {
+  background-color: rgba(36, 36, 51, 0.08);
+  color: var(--color-deep-slate);
+}
+
+.tag-vtol {
+  background-color: rgba(246, 146, 81, 0.15);
+  color: #c06528;
+}
+
+.tag-heavy {
+  background-color: rgba(201, 123, 132, 0.15);
+  color: var(--color-dusty-rose);
+}
+
+.drone-desc {
+  font-size: 11px;
+  color: var(--color-stone);
+}
+
+.drone-battery-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-pebble);
+  margin-top: 2px;
+}
+
+/* ВЕТЕР И КОМПАС */
+.weather-callout {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background-color: var(--color-fog);
+  border-radius: var(--radius-cardinner);
+  padding: 12px 14px;
+  margin-top: 4px;
+  border: 1px solid rgba(24, 24, 37, 0.06);
+}
+
+.compass-disc {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1.5px solid rgba(24, 24, 37, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  flex-shrink: 0;
+}
+
+.compass-n-label {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-weight: 800;
+  color: var(--color-stone);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.compass-arrow-wrap {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-tangerine-tag);
+  transition: transform 0.2s ease;
+  transform-origin: center center;
+}
+
+.weather-text strong {
+  font-size: 12px;
+  display: block;
+  color: var(--color-carbon);
+}
+
+.weather-text p {
+  font-size: 11px;
+  color: var(--color-stone);
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+/* РАДИО-КАРТОЧКИ КРИТЕРИЯ */
+.criterion-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radio-pill-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background-color: var(--color-fog);
+  border: 1px solid rgba(24, 24, 37, 0.08);
+  border-radius: var(--radius-cardinner);
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.radio-pill-card:hover {
+  background-color: #ebebeb;
+}
+
+.radio-pill-card input[type="radio"] {
+  accent-color: var(--color-tangerine-tag);
+  margin-top: 3px;
+}
+
+.radio-card-body strong {
+  font-size: 12px;
+  display: block;
+  color: var(--color-carbon);
+}
+
+.radio-card-body p {
+  font-size: 11px;
+  color: var(--color-stone);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+/* ЧЕКБОКСЫ ОГРАНИЧЕНИЙ */
+.checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  accent-color: var(--color-tangerine-tag);
+  margin-top: 3px;
+}
+
+.checkbox-text strong {
+  font-size: 12px;
+  display: block;
+  color: var(--color-carbon);
+}
+
+.checkbox-text span {
+  font-size: 11px;
+  color: var(--color-stone);
+}
+
+.tab-footer {
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+/* ==========================================================================
+   5. ПЛАВАЮЩИЙ ИНДИКАТОР ВЕТРА НА КАРТЕ
+   ========================================================================== */
+.map-floating-wind {
+  position: absolute;
+  top: 84px;
+  right: 20px;
+  background-color: var(--color-snow);
+  border-radius: var(--radius-overlays);
+  box-shadow: var(--shadow-card);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 800;
+  border: 1px solid rgba(24, 24, 37, 0.06);
+}
+
+.wind-arrow-mini {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-tangerine-tag);
+  transition: transform 0.2s ease;
+  transform-origin: center center;
+  flex-shrink: 0;
+}
+
+.wind-info-mini {
+  display: flex;
+  flex-direction: column;
+}
+
+.wind-speed {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-carbon);
+}
+
+.wind-dir {
+  font-size: 10px;
+  color: var(--color-stone);
+}
+
+/* ==========================================================================
+   6. ПЛАВАЮЩАЯ ЛЕГЕНДА
+   ========================================================================== */
+.map-floating-legend {
+  position: absolute;
+  bottom: 24px;
+  left: 20px;
+  background-color: var(--color-snow);
+  border-radius: var(--radius-cards);
+  box-shadow: var(--shadow-card);
+  padding: 14px 18px;
+  z-index: 800;
+  border: 1px solid rgba(24, 24, 37, 0.06);
+  min-width: 220px;
+}
+
+.legend-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--color-stone);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--color-midnight-ink);
+}
+
+.legend-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* ==========================================================================
+   7. НИЖНЯЯ ПЛАВАЮЩАЯ КАРТОЧКА РЕЗУЛЬТАТОВ (MISSION RESULTS HUB)
+   ========================================================================== */
+.floating-results-card {
+  position: absolute;
+  bottom: 20px;
+  left: 460px;
+  right: 20px;
+  background-color: var(--color-snow);
+  border-radius: var(--radius-cards);
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(24, 24, 37, 0.06);
+  z-index: 950;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(30px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.results-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.metric-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-caption {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-stone);
+  letter-spacing: 0.5px;
+}
+
+.metric-number {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-carbon);
+  margin-top: 1px;
+}
+
+.metric-item.highlight-orange .metric-number {
+  color: #d9681e;
+}
+
+.export-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.btn-plan {
+  background-color: rgba(24, 24, 37, 0.05);
+  font-weight: 600;
+}
+
+/* 4D PLAYER */
+.results-player-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(24, 24, 37, 0.06);
+}
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player-btn {
+  background-color: var(--color-fog);
+  border: 1px solid rgba(24, 24, 37, 0.1);
+  color: var(--color-carbon);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.player-btn:hover {
+  background-color: var(--color-midnight-ink);
+  color: var(--color-snow);
+}
+
+.player-time-display {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-carbon);
+  margin-left: 4px;
+}
+
+.time-slash {
+  color: var(--color-pebble);
+}
+
+.player-timeline {
+  flex: 1;
+}
+
+.player-slider {
+  width: 100%;
+  accent-color: var(--color-tangerine-tag);
+  cursor: pointer;
+  height: 4px;
+}
+
+.drone-status-chips {
+  display: flex;
+  gap: 8px;
+}
+
+.status-chip {
+  background-color: var(--color-fog);
+  border: 1px solid rgba(24, 24, 37, 0.08);
+  border-radius: var(--radius-badges);
+  padding: 4px 10px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #10b981;
+}
+
+/* UTILS */
+.mt-12 { margin-top: 12px; }
+.mt-16 { margin-top: 16px; }
+.mt-24 { margin-top: 24px; }
+
+/* REGULATORY AND COMPATIBILITY CALLOUTS */
+.regulatory-alert-box {
+  background-color: rgba(239, 35, 60, 0.08);
+  border: 1px solid rgba(239, 35, 60, 0.25);
+  border-radius: var(--radius-cardinner);
+  padding: 8px 12px;
+  font-size: 11px;
+  color: #b91c1c;
+  line-height: 1.4;
+  margin-top: 10px;
+}
+
+.drone-compat-box {
+  background-color: rgba(246, 146, 81, 0.08);
+  border: 1px solid rgba(246, 146, 81, 0.22);
+  border-radius: var(--radius-cardinner);
+  padding: 8px 12px;
+  font-size: 11px;
+  color: #9a3412;
+  line-height: 1.35;
+  margin-top: 10px;
+}
+
+.result-warning-banner {
+  background-color: #fef2f2;
+  border-bottom: 1px solid #fee2e2;
+  color: #991b1b;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top-left-radius: var(--radius-cards);
+  border-top-right-radius: var(--radius-cards);
+}
+
+/* OPERATIONAL CONSTRAINTS & FEASIBILITY ADVISOR */
+.constraints-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.constraint-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.constraint-label {
+  font-size: 11px;
+  color: var(--color-stone);
+  font-weight: 500;
+}
+
+.styled-input {
+  background-color: var(--color-fog);
+  border: 1px solid rgba(24, 24, 37, 0.12);
+  border-radius: var(--radius-badges);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--color-midnight-ink);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.styled-input:focus {
+  border-color: var(--color-tangerine-tag);
+}
+
+.feasibility-ribbon-card {
+  background-color: #ffffff;
+  border-top: 1px solid rgba(24, 24, 37, 0.08);
+  padding: 12px 18px;
+  font-size: 12px;
+}
+
+.feasibility-header-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.feasibility-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: var(--radius-badges);
+  letter-spacing: 0.5px;
+}
+
+.badge-feasible {
+  background-color: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.badge-infeasible {
+  background-color: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.advisor-text-box {
+  background-color: var(--color-fog);
+  border-left: 3px solid var(--color-tangerine-tag);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--color-midnight-ink);
+  margin-bottom: 10px;
+}
+
+.scenarios-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.scenario-pill {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-cardinner);
+  padding: 8px 10px;
+  font-size: 11px;
+}
+
+.scenario-pill strong {
+  display: block;
+  color: var(--color-midnight-ink);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.scenario-metric {
+  color: var(--color-stone);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.obstacle-badge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.obstacle-tag {
+  background-color: #fff1f2;
+  border: 1px solid #ffe4e6;
+  color: #be123c;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+}
+
+.obstacle-tag.safe {
+  background-color: #f0fdf4;
+  border-color: #dcfce7;
+  color: #15803d;
+}
