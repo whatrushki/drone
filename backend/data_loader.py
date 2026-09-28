@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
 from shapely.geometry import Polygon, MultiPolygon, Point, shape
 from shapely.strtree import STRtree
+from shapely.ops import transform
+from pyproj import Transformer
 import json
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -120,12 +122,16 @@ class HackathonDataLoader:
                 if not poly.is_valid:
                     poly = poly.buffer(0)
                 if poly.is_valid and not poly.is_empty:
+                    lon, lat = poly.centroid.x, poly.centroid.y
+                    zone = max(1, min(60, int((lon + 180) / 6) + 1))
+                    epsg = (32600 if lat >= 0 else 32700) + zone
+                    to_utm = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True).transform
                     item = {
                         "fid": fid,
                         "geometry": poly,
                         "centroid": (poly.centroid.x, poly.centroid.y),
                         "bounds": poly.bounds,
-                        "area_m2": round(poly.area * 111000 * 111000 * 0.57, 1)
+                        "area_m2": round(transform(to_utm, poly).area, 1)
                     }
                     self.survey_polygons.append(item)
                     geometries.append(poly)

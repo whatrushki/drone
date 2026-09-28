@@ -49,7 +49,13 @@ def solve_wind_triangle(
     
     # Путевая скорость: проекция воздушной скорости + продольный ветер
     ground_speed_ms = airspeed_ms * math.cos(wca_rad) + w_along
-    ground_speed_ms = max(0.5, ground_speed_ms)
+    if ground_speed_ms <= 0.0:
+        return {
+            "ground_speed_ms": 0.0,
+            "wca_deg": round(wca_deg, 2),
+            "true_heading_deg": round((heading_deg + wca_deg) % 360.0, 1),
+            "feasible": False,
+        }
     
     true_heading_deg = (heading_deg + wca_deg) % 360.0
     
@@ -88,6 +94,16 @@ def calculate_flight_leg_utm(
         
     heading_deg = (math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0
     wt = solve_wind_triangle(heading_deg, airspeed_ms, wind_speed_ms, wind_from_deg)
+    if not wt["feasible"]:
+        return {
+            "distance_m": round(distance_m, 1),
+            "heading_deg": round(heading_deg, 1),
+            "ground_speed_ms": 0.0,
+            "wca_deg": wt["wca_deg"],
+            "time_s": math.inf,
+            "battery_used_pct": math.inf,
+            "feasible": False,
+        }
     v_ground = wt["ground_speed_ms"]
     time_s = distance_m / v_ground
     

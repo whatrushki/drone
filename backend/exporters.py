@@ -1,6 +1,7 @@
 import json
 from typing import Dict, Any, List
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 
 def export_plan_to_geojson(drone_plan: Dict[str, Any]) -> Dict[str, Any]:
     """Экспорт индивидуального полетного задания БВС в стандартный GeoJSON"""
@@ -60,7 +61,7 @@ def export_plan_to_geojson(drone_plan: Dict[str, Any]) -> Dict[str, Any]:
 
 def export_plan_to_kml(drone_plan: Dict[str, Any]) -> str:
     """Экспорт индивидуального полетного задания БВС в валидный KML (Google Earth / Geoscan)"""
-    drone_name = drone_plan["drone_name"]
+    drone_name = escape(str(drone_plan["drone_name"]))
     line_color = "7fff0000" if drone_plan["drone_type"] == "fixed_wing" else "7f00ffff" # ABGR format
     
     kml = [
@@ -110,11 +111,12 @@ def export_plan_to_kml(drone_plan: Dict[str, Any]) -> str:
     ])
     
     for idx, wp in enumerate(drone_plan["waypoints"]):
-        stage = wp["stage"]
+        stage = escape(str(wp["stage"]))
+        action = escape(str(wp["action"]))
         kml.extend([
             '      <Placemark>',
             f'        <name>WP {idx+1}: {stage}</name>',
-            f'        <description>Действие: {wp["action"]}&#10;Высота: {wp["alt_m"]} м&#10;Скорость: {wp["speed_ms"]} м/с</description>',
+            f'        <description>Действие: {action}&#10;Высота: {wp["alt_m"]} м&#10;Скорость: {wp["speed_ms"]} м/с</description>',
             '        <Point>',
             '          <altitudeMode>relativeToGround</altitudeMode>',
             f'          <coordinates>{wp["lon"]},{wp["lat"]},{wp["alt_m"]}</coordinates>',

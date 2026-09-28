@@ -175,8 +175,8 @@ SENSOR_CATALOG: Dict[str, SensorSpec] = {
 }
 
 class WindConfig(BaseModel):
-    speed_ms: float = 5.0
-    direction_deg: float = 90.0
+    speed_ms: float = Field(default=5.0, ge=0.0)
+    direction_deg: float = Field(default=90.0, ge=0.0, lt=360.0)
 
 class LaunchPoint(BaseModel):
     id: str
@@ -191,11 +191,12 @@ class MissionRequest(BaseModel):
     selected_fid: Optional[int] = None
     sensor_id: str = "sony_rx1r2"
     sensor_ids: Optional[List[str]] = None # Поддержка нескольких сенсоров для комбинированной съемки (RGB + LiDAR)
-    target_gsd_cm: float = 3.0
-    overlap_forward: Optional[float] = None
-    overlap_side: Optional[float] = None
+    target_gsd_cm: float = Field(default=3.0, gt=0.0, le=100.0)
+    overlap_forward: Optional[float] = Field(default=None, ge=0.0, lt=1.0)
+    overlap_side: Optional[float] = Field(default=None, ge=0.0, lt=1.0)
     available_drones: List[str] = ["geoscan_201", "geoscan_gemini"]
     launch_points: Optional[List[LaunchPoint]] = None
+    allowed_airspace_geojson: Optional[dict] = None
     wind: WindConfig = WindConfig()
     sweep_angle_deg: Optional[float] = None # Ручной или авто выбор угла галсов (по умолчанию по длинной оси)
     optimization_criterion: Literal["min_makespan", "min_flight_time"] = "min_makespan"
@@ -203,6 +204,6 @@ class MissionRequest(BaseModel):
     avoid_obstacles: bool = True
     flight_time_utc: Optional[str] = "2026-05-15T10:00:00Z"
     # Операционные ограничения и ТЭО (ответ на требования экспертов Геоскана)
-    max_allowed_time_min: Optional[float] = None # Лимит времени на миссию (мин)
-    max_available_drones: Optional[int] = None # Максимально допустимое кол-во активных бортов
-    battery_swap_penalty_min: float = 15.0 # Время на наземное обслуживание и смену АКБ (мин)
+    max_allowed_time_min: Optional[float] = Field(default=None, gt=0.0) # Лимит времени на миссию (мин)
+    max_available_drones: Optional[int] = Field(default=None, ge=1) # Максимально допустимое кол-во активных бортов
+    battery_swap_penalty_min: float = Field(default=15.0, ge=0.0) # Время на наземное обслуживание и смену АКБ (мин)

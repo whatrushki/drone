@@ -1,6 +1,6 @@
 // GEOSCAN FleetCommander AI - Frontend Application
 // Dialog Design System Light Theme
-const API_BASE = "http://localhost:8000";
+const API_BASE = window.location.origin;
 
 let map;
 let baseLayers = {};
@@ -11,8 +11,19 @@ let currentObstacleLayer = null;
 let drawnItems = null;
 
 let currentMissionPlan = null;
+let comparisonPlans = {};
+let missionRevision = 0;
+let activePlanController = null;
 let currentParcelGeoJSON = null;
 let currentAngleMode = "auto"; // 'auto' | 'axis' | 'wind' | 'manual'
+let allParcels = [];
+let launchPoints = [];
+let launchMarkers = [];
+let launchPlacementMode = null;
+let allowedAreaGeoJSON = null;
+let allowedAreaLayer = null;
+let pendingAllowedArea = false;
+let previewRevision = 0;
 
 // Матрица совместимости сенсоров с моделями БВС Геоскан
 const SENSOR_DRONE_COMPATIBILITY = {
@@ -67,12 +78,12 @@ function initMap() {
     maxZoom: 19
   });
 
-  positronTiles.addTo(map);
+  osmTiles.addTo(map);
 
   baseLayers = {
+    "Карта OpenStreetMap": osmTiles,
     "☀️ Светлая карта (CARTO Positron)": positronTiles,
-    "🛰️ Спутник (Esri Satellite)": satTiles,
-    "🗺️ OpenStreetMap": osmTiles
+    "🛰️ Спутник (Esri Satellite)": satTiles
   };
 
   L.control.layers(baseLayers, null, { position: "topright" }).addTo(map);
@@ -102,7 +113,17 @@ function initMap() {
   map.addControl(drawControl);
 
   map.on(L.Draw.Event.CREATED, (e) => {
-    clearMissionArtifacts();
+    invalidateMission();
+    if (pendingAllowedArea) {
+      pendingAllowedArea = false;
+      if (allowedAreaLayer) map.removeLayer(allowedAreaLayer);
+      allowedAreaLayer = e.layer;
+      allowedAreaLayer.setStyle({ color: "#15803d", fillColor: "#22c55e", fillOpacity: 0.08, weight: 2 });
+      allowedAreaLayer.addTo(map);
+      allowedAreaGeoJSON = allowedAreaLayer.toGeoJSON();
+      document.getElementById("allowedAreaHint").innerText = "Граница задана; весь маршрут должен оставаться внутри неё.";
+      return;
+    }
     drawnItems.clearLayers();
     if (currentParcelLayer) map.removeLayer(currentParcelLayer);
     
@@ -114,6 +135,14 @@ function initMap() {
     document.getElementById("parcelInfoHint").innerText = "Нарисован пользовательский полигон";
     
     loadNearbyRestrictions(layer.getBounds());
+  });
+
+  map.on("click", (event) => {
+    if (!launchPlacementMode) return;
+    addLaunchPoint(event.latlng, launchPlacementMode);
+    launchPlacementMode = null;
+    map.getContainer().style.cursor = "";
+    document.querySelectorAll(".map-edit-actions button").forEach(button => button.classList.remove("active"));
   });
 }
 
@@ -139,16 +168,16 @@ function initTabsAndPanel() {
 
   // Сворачивание панели
   const toggleBtn = document.getElementById("btnTogglePanel");
+  const openBtn = document.getElementById("btnOpenPanel");
   const panel = document.getElementById("controlPanel");
-  const statsRibbon = document.getElementById("statsRibbon");
 
   toggleBtn.addEventListener("click", () => {
     const isCollapsed = panel.classList.toggle("collapsed");
     toggleBtn.innerText = isCollapsed ? "▶" : "◀";
-    if (statsRibbon) {
-      statsRibbon.style.left = isCollapsed ? "20px" : "460px";
-    }
+    document.body.classList.toggle("panel-collapsed", isCollapsed);
+    openBtn.hidden = !isCollapsed;
   });
+  openBtn.addEventListener("click", () => toggleBtn.click());
 }
 
 function switchTab(tabId) {
@@ -160,6 +189,90 @@ function switchTab(tabId) {
   });
 }
 
+function showMissionMessage(message) {
+  const box = document.getElementById("missionMessage");
+  box.textContent = message;
+  box.hidden = false;
+  box.focus();
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character]);
+}
+
+function invalidateMission() {
+  missionRevision += 1;
+  if (activePlanController) activePlanController.abort();
+  activePlanController = null;
+  currentMissionPlan = null;
+  comparisonPlans = {};
+  clearMissionArtifacts();
+  document.getElementById("statsRibbon").style.display = "none";
+  document.getElementById("comparisonSection").hidden = true;
+  document.getElementById("missionMessage").hidden = true;
+  const btn1 = document.getElementById("btnCalculate");
+  const btn2 = document.getElementById("btnCalculateTab");
+  if (btn1) { btn1.innerText = "Сформировать задание"; btn1.disabled = false; }
+  if (btn2) { btn2.innerText = "Сформировать полетное задание"; btn2.disabled = false; }
+}
+
+function renderLaunchPoints() {
+  const list = document.getElementById("launchPointList");
+  list.replaceChildren();
+  launchMarkers.forEach(marker => map.removeLayer(marker));
+  launchMarkers = [];
+  launchPoints.forEach((point, index) => {
+    const marker = L.marker([point.lat, point.lon], { draggable: true })
+      .bindPopup(`${point.type === "base" ? "База" : "Резервная площадка"} ${index + 1}`)
+      .addTo(map);
+    marker.on("dragend", () => {
+      const position = marker.getLatLng();
+      point.lat = position.lat;
+      point.lon = position.lng;
+      invalidateMission();
+      renderLaunchPoints();
+    });
+    launchMarkers.push(marker);
+    const row = document.createElement("div");
+    row.className = "launch-point-row";
+    const label = document.createElement("span");
+    label.textContent = `${point.type === "base" ? "База" : "Резервная"} ${index + 1}: ${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Удалить";
+    remove.setAttribute("aria-label", `Удалить точку ${index + 1}`);
+    remove.addEventListener("click", () => {
+      launchPoints.splice(index, 1);
+      invalidateMission();
+      renderLaunchPoints();
+    });
+    row.append(label, remove);
+    list.appendChild(row);
+  });
+}
+
+function addLaunchPoint(latlng, type) {
+  launchPoints.push({
+    id: `${type}_${Date.now()}_${launchPoints.length}`,
+    name: type === "base" ? "База оператора" : "Резервная площадка",
+    lat: latlng.lat,
+    lon: latlng.lng,
+    type
+  });
+  invalidateMission();
+  renderLaunchPoints();
+}
+
+function setLaunchPlacement(type, button) {
+  launchPlacementMode = type;
+  map.getContainer().style.cursor = "crosshair";
+  document.querySelectorAll(".map-edit-actions button").forEach(item => item.classList.remove("active"));
+  button.classList.add("active");
+  showMissionMessage("Щёлкните по карте, чтобы поставить точку. После этого её можно перетащить.");
+}
+
 // 3. ИНИЦИАЛИЗАЦИЯ СЛУШАТЕЛЕЙ СОБЫТИЙ
 function initEventListeners() {
   // Селектор участков
@@ -169,6 +282,34 @@ function initEventListeners() {
   });
 
   document.getElementById("btnRefreshParcels").addEventListener("click", loadParcelsList);
+  document.getElementById("parcelSearch").addEventListener("input", renderParcelOptions);
+  document.getElementById("btnAddBase").addEventListener("click", event => setLaunchPlacement("base", event.currentTarget));
+  document.getElementById("btnAddEmergency").addEventListener("click", event => setLaunchPlacement("emergency_pad", event.currentTarget));
+  document.getElementById("btnDrawAllowed").addEventListener("click", () => {
+    pendingAllowedArea = true;
+    new L.Draw.Polygon(map, { allowIntersection: false, shapeOptions: { color: "#15803d", fillOpacity: 0.08 } }).enable();
+  });
+  document.getElementById("btnClearAllowed").addEventListener("click", () => {
+    if (allowedAreaLayer) map.removeLayer(allowedAreaLayer);
+    allowedAreaLayer = null;
+    allowedAreaGeoJSON = null;
+    document.getElementById("allowedAreaHint").innerText = "Не задана. Ограничения из набора данных проверяются отдельно.";
+    invalidateMission();
+  });
+
+  document.querySelectorAll("#sensorSelect, #gsdSlider, #windSpeedSlider, #windDirSlider, #manualAngleSlider, #maxTimeLimitInput, #maxDronesLimitInput, #overlapForwardInput, #overlapSideInput, #batterySwapInput, #drone_201, #drone_gemini, #drone_801")
+    .forEach(input => input.addEventListener(input.type === "range" ? "input" : "change", invalidateMission));
+  document.querySelectorAll("input[name='optCriterion']").forEach(input => input.addEventListener("change", () => {
+    if (comparisonPlans[input.value]) {
+      currentMissionPlan = comparisonPlans[input.value];
+      renderMissionResults(currentMissionPlan);
+      renderComparison();
+    } else if (currentMissionPlan) {
+      input.checked = false;
+      document.querySelector(`input[name="optCriterion"][value="${currentMissionPlan.optimization_criterion}"]`).checked = true;
+      showMissionMessage("Для выбранного критерия допустимый маршрут не найден. Измените условия и повторите расчёт.");
+    } else invalidateMission();
+  }));
 
   // Сенсор и GSD
   document.getElementById("sensorSelect").addEventListener("change", updatePhotogrammetryPreview);
@@ -224,6 +365,7 @@ function initEventListeners() {
   const angleBadge = document.getElementById("angleModeBadge");
 
   function setAngleMode(mode) {
+    invalidateMission();
     currentAngleMode = mode;
     if (btnAuto) btnAuto.classList.toggle("active", mode === "auto");
     if (btnAxis) btnAxis.classList.toggle("active", mode === "axis");
@@ -231,7 +373,7 @@ function initEventListeners() {
     if (btnManual) btnManual.classList.toggle("active", mode === "manual");
     if (manualBlock) manualBlock.style.display = mode === "manual" ? "block" : "none";
     if (angleBadge) {
-      if (mode === "auto") angleBadge.innerText = "Авто (Оптимум)";
+      if (mode === "auto") angleBadge.innerText = "Авто (поиск)";
       else if (mode === "axis") angleBadge.innerText = "Вдоль поля";
       else if (mode === "wind") angleBadge.innerText = "По ветру";
       else if (mode === "manual") angleBadge.innerText = "Ручной угол";
@@ -257,6 +399,9 @@ function initEventListeners() {
   document.getElementById("btnExportKml").addEventListener("click", exportKml);
   document.getElementById("btnExportGeoJson").addEventListener("click", exportGeoJson);
   document.getElementById("btnExportPlan").addEventListener("click", exportPlan);
+  document.getElementById("showAlternativeRoute").addEventListener("change", () => {
+    if (currentMissionPlan) renderMissionResults(currentMissionPlan);
+  });
 
   // Плеер
   document.getElementById("btnPlayPause").addEventListener("click", toggleSimulation);
@@ -294,38 +439,47 @@ function initEventListeners() {
 // 4. ЗАГРУЗКА СПИСКА УЧАСТКОВ
 async function loadParcelsList() {
   try {
-    const res = await fetch(`${API_BASE}/api/parcels?limit=100`);
+    const res = await fetch(`${API_BASE}/api/parcels?limit=1000`);
+    if (!res.ok) throw new Error(`Список участков: HTTP ${res.status}`);
     const data = await res.json();
-    
-    const select = document.getElementById("parcelSelect");
-    select.innerHTML = '<option value="">-- Выберите полигон АФС --</option>';
-    
-    data.parcels.forEach((p) => {
-      const opt = document.createElement("option");
-      opt.value = p.fid;
-      opt.text = `Участок FID ${p.fid} (${p.area_ha} га)`;
-      select.appendChild(opt);
-    });
-
-    document.getElementById("datasetStats").innerText = `${data.total} полигонов • 341 зона`;
-
-    if (data.parcels.length > 0) {
-      select.value = data.parcels[0].fid;
-      selectParcel(data.parcels[0].fid);
-    }
+    allParcels = data.parcels;
+    renderParcelOptions();
+    document.getElementById("datasetStats").innerText = `${allParcels.length} участков • зоны проверяются`;
+    if (allParcels.length > 0) selectParcel(allParcels[0].index);
   } catch (err) {
     console.error("Ошибка загрузки участков:", err);
+    showMissionMessage(`Не удалось загрузить участки: ${err.message}`);
   }
 }
 
+function renderParcelOptions() {
+    const select = document.getElementById("parcelSelect");
+    const previous = select.value;
+    select.replaceChildren(new Option("— Выберите участок —", ""));
+    const query = document.getElementById("parcelSearch").value.trim().toLowerCase();
+    const matching = allParcels.filter(p => !query || String(p.fid).includes(query) || String(p.area_ha).includes(query));
+    matching.forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.index;
+      opt.text = `FID ${p.fid} · ${p.area_ha ? `${p.area_ha} га` : "<0,01 га"} · №${p.index + 1}`;
+      select.appendChild(opt);
+    });
+    if (matching.some(p => String(p.index) === previous)) select.value = previous;
+    document.getElementById("parcelCountHint").innerText = `Найдено ${matching.length} из ${allParcels.length} участков`;
+    if (query && matching.length === 1 && String(matching[0].index) !== previous) {
+      selectParcel(matching[0].index);
+    }
+}
+
 // 5. ВЫБОР УЧАСТКА
-async function selectParcel(fid) {
+async function selectParcel(index) {
   try {
-    clearMissionArtifacts();
+    invalidateMission();
     const statsRibbon = document.getElementById("statsRibbon");
     if (statsRibbon) statsRibbon.style.display = "none";
 
-    const res = await fetch(`${API_BASE}/api/parcels/${fid}`);
+    const res = await fetch(`${API_BASE}/api/parcels/by-index/${index}`);
+    if (!res.ok) throw new Error(`Участок: HTTP ${res.status}`);
     const geojson = await res.json();
     currentParcelGeoJSON = geojson;
 
@@ -345,11 +499,14 @@ async function selectParcel(fid) {
     const bounds = currentParcelLayer.getBounds();
     map.fitBounds(bounds, { padding: [80, 80] });
 
-    document.getElementById("parcelInfoHint").innerText = `Площадь: ${geojson.properties.area_ha} га | FID: ${fid}`;
+    document.getElementById("parcelSelect").value = String(index);
+    const area = geojson.properties.area_ha ? `${geojson.properties.area_ha} га` : `${geojson.properties.area_m2} м²`;
+    document.getElementById("parcelInfoHint").innerText = `Площадь: ${area} | FID: ${geojson.properties.fid}`;
 
     loadNearbyRestrictions(bounds);
   } catch (err) {
     console.error("Ошибка загрузки полигона:", err);
+    showMissionMessage(`Не удалось загрузить участок: ${err.message}`);
   }
 }
 
@@ -378,9 +535,9 @@ async function loadNearbyRestrictions(bounds) {
         const alt = p.altitude_info;
         layer.bindPopup(`
           <div style="font-size:12px; line-height:1.45; font-family:Inter, sans-serif;">
-            <strong style="color:#c97b84;">⛔ ${p.name}</strong> (${p.type})<br>
-            <b>Высотный диапазон:</b> от ${alt.min_alt_m}м до ${alt.max_alt_m}м (${alt.reference})<br>
-            <small style="color:#8b8b8b;">Стандарт 4D Airspace</small>
+            <strong style="color:#c97b84;">⛔ ${escapeHtml(p.name)}</strong> (${escapeHtml(p.type)})<br>
+            <b>Высотный диапазон:</b> от ${escapeHtml(alt.min_alt_m)}м до ${escapeHtml(alt.max_alt_m)}м (${escapeHtml(alt.reference)})<br>
+            <small style="color:#8b8b8b;">Время действия уточняется оператором</small>
           </div>
         `);
       }
@@ -418,10 +575,10 @@ async function loadNearbyRestrictions(bounds) {
         ]);
         group.bindPopup(`
           <div style="font-size:12px; font-family:Inter, sans-serif; line-height:1.45;">
-            <strong style="color:#b91c1c;">🗼 ${p.name}</strong><br>
+            <strong style="color:#b91c1c;">🗼 ${escapeHtml(p.name)}</strong><br>
             Высота препятствия: <b>${p.height_m} м AGL</b><br>
             Зона безопасности: <b>${rad} м</b><br>
-            <small style="color:#64748b;">GSD-контроль: автоматический горизонтальный обход</small>
+            <small style="color:#64748b;">Маршрут проверяется относительно буфера при расчёте</small>
           </div>
         `);
         return group;
@@ -541,6 +698,7 @@ function filterDronesBySensor() {
 
 // 8. ПРЕВЬЮ ФОТОГРАММЕТРИИ И ПРОВЕРКА СОВМЕСТИМОСТИ
 async function updatePhotogrammetryPreview() {
+  const revision = ++previewRevision;
   filterDronesBySensor();
 
   const sensorSelect = document.getElementById("sensorSelect");
@@ -554,18 +712,27 @@ async function updatePhotogrammetryPreview() {
 
   // Мультисенсорный режим: RGB + LiDAR
   if (sensorId === "rgb_and_lidar") {
-    document.getElementById("calcHeight").innerText = "185м / 125м";
-    document.getElementById("calcSpacing").innerText = "66.5м / 50.0м";
-    document.getElementById("calcTrigger").innerText = "31.8м / 0.1с";
-    document.getElementById("calcMaxSpeed").innerText = "15.0 м/с";
-
     if (compatBox) {
       compatBox.style.display = "block";
-      compatBox.innerHTML = "✨ <b>Комплексная съемка:</b> АФС высокой четкости (Геоскан 201) + Лазерное сканирование (Геоскан 801). Автоматически задействуется комбинированный флот.";
+      compatBox.textContent = "Комплексная съёмка: два сенсора планируются по отдельности и затем ставятся в общее расписание.";
     }
 
     document.getElementById("drone_201").checked = true;
     document.getElementById("drone_801").checked = true;
+    try {
+      const data = await Promise.all(["sony_rx1r2", "lidar_agm_ms3"].map(async id => {
+        const response = await fetch(`${API_BASE}/api/preview-photogrammetry?sensor_id=${id}&target_gsd_cm=${gsdCm}`, { method: "POST" });
+        if (!response.ok) throw new Error("Превью недоступно");
+        return response.json();
+      }));
+      if (revision !== previewRevision) return;
+      document.getElementById("calcHeight").innerText = data.map(d => `${d.flight_height_m} м`).join(" / ");
+      document.getElementById("calcSpacing").innerText = data.map(d => `${d.line_spacing_m} м`).join(" / ");
+      document.getElementById("calcTrigger").innerText = data.map(d => `${d.trigger_dist_m} м`).join(" / ");
+      document.getElementById("calcMaxSpeed").innerText = data.map(d => `${d.max_speed_anti_blur_ms} м/с`).join(" / ");
+    } catch (err) {
+      if (revision === previewRevision) showMissionMessage(`Не удалось рассчитать превью: ${err.message}`);
+    }
     return;
   }
 
@@ -584,6 +751,7 @@ async function updatePhotogrammetryPreview() {
       method: "POST"
     });
     const d = await res.json();
+    if (revision !== previewRevision) return;
 
     document.getElementById("calcHeight").innerText = `${d.flight_height_m} м`;
     document.getElementById("calcSpacing").innerText = `${d.line_spacing_m} м`;
@@ -592,7 +760,7 @@ async function updatePhotogrammetryPreview() {
 
     if (d.flight_height_m > 150.0 && warningBox) {
       warningBox.style.display = "block";
-      warningBox.innerHTML = `⚠️ <b>Высота H = ${d.flight_height_m} м &gt; 150 м:</b> Превышение лимита Постановления Правительства РФ № 138. Требуется зональное разрешение ЕС ОрВД.`;
+      warningBox.textContent = `Высота H = ${d.flight_height_m} м превышает порог 150 м. Проверьте применимые ограничения и разрешения до вылета.`;
     }
 
     if (d.flight_height_m < 90.0 && sensorId !== "lidar_agm_ms3" && sensorId !== "geophysics_mag" && compatBox) {
@@ -607,7 +775,7 @@ async function updatePhotogrammetryPreview() {
 // 9. РАСЧЕТ И ФОРМИРОВАНИЕ ПОЛЕТНОГО ЗАДАНИЯ
 async function calculateMission() {
   if (!currentParcelGeoJSON) {
-    alert("Пожалуйста, выберите или нарисуйте участок съемки!");
+    showMissionMessage("Выберите или нарисуйте участок съемки.");
     return;
   }
 
@@ -620,12 +788,30 @@ async function calculateMission() {
   if (d801 && d801.checked && !d801.disabled) drones.push("geoscan_801");
 
   if (drones.length === 0) {
-    alert("Выберите хотя бы один совместимый БВС из доступного флота!");
+    showMissionMessage("Выберите хотя бы один совместимый БВС.");
     return;
   }
 
-  // Полная зачистка старых траекторий перед новым расчетом
-  clearMissionArtifacts();
+  if (launchPoints.length && !launchPoints.some(point => point.type === "base")) {
+    showMissionMessage("Добавлена резервная площадка, но не задана основная база. Добавьте базу на карте.");
+    switchTab("tab-territory");
+    return;
+  }
+
+  for (const id of ["maxTimeLimitInput", "maxDronesLimitInput", "overlapForwardInput", "overlapSideInput", "batterySwapInput"]) {
+    const input = document.getElementById(id);
+    if (input.value !== "" && !input.checkValidity()) {
+      showMissionMessage(`Проверьте значение поля «${input.closest("label")?.textContent.trim() || input.getAttribute("aria-label") || id}».`);
+      switchTab("tab-weather");
+      input.focus();
+      return;
+    }
+  }
+
+  invalidateMission();
+  const revision = missionRevision;
+  activePlanController = new AbortController();
+  const signal = activePlanController.signal;
 
   const optCriterion = document.querySelector('input[name="optCriterion"]:checked').value;
   const sensorSelectValue = document.getElementById("sensorSelect").value;
@@ -638,7 +824,10 @@ async function calculateMission() {
     target_gsd_cm: gsdCm,
     available_drones: drones,
     wind: { speed_ms: windSpeed, direction_deg: windDir },
-    optimization_criterion: optCriterion
+    optimization_criterion: optCriterion,
+    launch_points: launchPoints.length ? launchPoints : null,
+    allowed_airspace_geojson: allowedAreaGeoJSON,
+    battery_swap_penalty_min: Number(document.getElementById("batterySwapInput").value || "15")
   };
 
   // Передача угла ориентации галсов
@@ -650,7 +839,7 @@ async function calculateMission() {
   } else if (currentAngleMode === "wind") {
     payload.sweep_angle_deg = windDir % 180;
   } else {
-    payload.sweep_angle_deg = null; // Автоматический расчет глобального оптимума сервером
+    payload.sweep_angle_deg = null;
   }
 
   const timeLimitVal = document.getElementById("maxTimeLimitInput")?.value;
@@ -660,6 +849,10 @@ async function calculateMission() {
   }
   if (dronesLimitVal && parseInt(dronesLimitVal, 10) > 0) {
     payload.max_available_drones = parseInt(dronesLimitVal, 10);
+  }
+  for (const [id, field] of [["overlapForwardInput", "overlap_forward"], ["overlapSideInput", "overlap_side"]]) {
+    const input = document.getElementById(id);
+    if (input.value !== "") payload[field] = Number(input.value) / 100;
   }
 
   if (sensorSelectValue === "rgb_and_lidar") {
@@ -674,23 +867,75 @@ async function calculateMission() {
   if (btn2) { btn2.innerText = "Расчет траекторий..."; btn2.disabled = true; }
 
   try {
-    const res = await fetch(`${API_BASE}/api/plan-mission`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+    const criteria = ["min_makespan", "min_flight_time"];
+    const responses = await Promise.all(criteria.map(async criterion => {
+      try {
+        const res = await fetch(`${API_BASE}/api/plan-mission`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, optimization_criterion: criterion }),
+          signal
+        });
+        const body = await res.json();
+        return res.ok ? { plan: body } : { error: body.detail || `HTTP ${res.status}` };
+      } catch (error) {
+        if (error.name === "AbortError") throw error;
+        return { error: error.message || "Сервис недоступен" };
+      }
+    }));
+    if (revision !== missionRevision) return;
+    criteria.forEach((criterion, index) => {
+      if (responses[index].plan) comparisonPlans[criterion] = responses[index].plan;
     });
-
-    const plan = await res.json();
-    currentMissionPlan = plan;
-
-    renderMissionResults(plan);
+    if (!comparisonPlans[optCriterion]) {
+      throw new Error(responses[criteria.indexOf(optCriterion)].error || "Маршрут не найден");
+    }
+    currentMissionPlan = comparisonPlans[optCriterion];
+    renderMissionResults(currentMissionPlan);
+    renderComparison(responses);
   } catch (err) {
+    if (err.name === "AbortError" || revision !== missionRevision) return;
     console.error("Ошибка расчета миссии:", err);
-    alert("Ошибка расчета: " + err.message);
+    showMissionMessage(`Маршрут не найден: ${err.message}. Измените область, флот или условия и повторите расчёт.`);
   } finally {
-    if (btn1) { btn1.innerText = "Сформировать задание"; btn1.disabled = false; }
-    if (btn2) { btn2.innerText = "⚡ Сформировать полетное задание"; btn2.disabled = false; }
+    if (revision === missionRevision) {
+      activePlanController = null;
+      if (btn1) { btn1.innerText = "Сформировать задание"; btn1.disabled = false; }
+      if (btn2) { btn2.innerText = "Сформировать полетное задание"; btn2.disabled = false; }
+    }
   }
+}
+
+function renderComparison(responses = null) {
+  const section = document.getElementById("comparisonSection");
+  const grid = document.getElementById("comparisonGrid");
+  grid.replaceChildren();
+  const criteria = [
+    ["min_makespan", "Быстрее завершить"],
+    ["min_flight_time", "Меньше налёт"]
+  ];
+  criteria.forEach(([criterion, title], index) => {
+    const plan = comparisonPlans[criterion];
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `comparison-card${currentMissionPlan === plan ? " selected" : ""}`;
+    if (plan) {
+      const m = plan.metrics;
+      card.innerHTML = `<strong>${title}</strong><span>Завершение: ${m.makespan_min} мин · Налёт: ${m.total_fleet_time_min} мин</span><span>Дистанция: ${m.total_fleet_distance_km} км · Бортов: ${m.active_drones_count} · Покрытие: ${m.coverage_pct}%</span>`;
+      card.addEventListener("click", () => {
+        currentMissionPlan = plan;
+        document.querySelector(`input[name="optCriterion"][value="${criterion}"]`).checked = true;
+        renderMissionResults(plan);
+        renderComparison();
+      });
+    } else {
+      card.disabled = true;
+      card.innerHTML = `<strong>${title}</strong><span>Допустимый маршрут не найден${responses?.[index]?.error ? `: ${escapeHtml(responses[index].error)}` : ""}</span>`;
+    }
+    grid.appendChild(card);
+  });
+  section.hidden = false;
+  document.getElementById("comparisonNote").textContent = "Лучшие найденные варианты; оптимальность не доказана";
 }
 
 // 9. ОТРИСОВКА РЕЗУЛЬТАТОВ РАСЧЕТА
@@ -711,13 +956,14 @@ function renderMissionResults(plan) {
   }
   if (bannerMsgs.length > 0 && alertBanner) {
     alertBanner.style.display = "flex";
-    alertBanner.innerHTML = bannerMsgs.join("<br>");
+    alertBanner.innerHTML = bannerMsgs.map(escapeHtml).join("<br>");
   } else if (alertBanner) {
     alertBanner.style.display = "none";
   }
 
   document.getElementById("statArea").innerText = `${plan.metrics.total_survey_area_ha} га`;
   document.getElementById("statMakespan").innerText = `${plan.metrics.makespan_min} мин`;
+  document.getElementById("statFlightTime").innerText = `${plan.metrics.total_fleet_time_min} мин`;
   document.getElementById("statDistance").innerText = `${plan.metrics.total_fleet_distance_km} км`;
   document.getElementById("statSwaths").innerText = `${plan.metrics.total_swaths}`;
   document.getElementById("statDronesCount").innerText = `${plan.metrics.active_drones_count}`;
@@ -737,7 +983,10 @@ function renderMissionResults(plan) {
     feasibilityCard.style.display = "block";
     const badge = document.getElementById("feasibilityBadge");
     if (badge) {
-      if (plan.feasibility.is_feasible) {
+      if (plan.height_warning) {
+        badge.className = "feasibility-badge badge-review";
+        badge.innerText = "ТРЕБУЕТ ПРОВЕРКИ";
+      } else if (plan.feasibility.is_feasible) {
         badge.className = "feasibility-badge badge-feasible";
         badge.innerText = "ВЫПОЛНИМО";
       } else {
@@ -747,20 +996,26 @@ function renderMissionResults(plan) {
     }
     
     const summaryEl = document.getElementById("advisorSummaryText");
-    if (summaryEl) summaryEl.innerText = plan.feasibility.advisor_summary || "";
+    if (summaryEl) {
+      const search = plan.search && !Array.isArray(plan.search) ? plan.search : null;
+      const searchNote = search ? ` Оценено ${search.evaluated_candidates} вариантов; показан лучший найденный маршрут, глобальный оптимум не доказан.` : "";
+      const coverageNote = plan.metrics.coverage_pct !== undefined ? ` Покрытие съемкой: ${plan.metrics.coverage_pct}%.` : "";
+      summaryEl.innerText = (plan.feasibility.advisor_summary || "") + coverageNote + searchNote;
+    }
     
     // Сценарии
     const scenariosGrid = document.getElementById("scenariosGrid");
+    if (scenariosGrid) scenariosGrid.innerHTML = "";
     if (scenariosGrid && plan.feasibility.fleet_scenarios) {
       const sc = plan.feasibility.fleet_scenarios;
       scenariosGrid.innerHTML = `
         <div class="scenario-pill">
-          <strong>${sc.single_drone.name}</strong>
+          <strong>${escapeHtml(sc.single_drone.name)}</strong>
           <div class="scenario-metric">Время: ${sc.single_drone.makespan_min} мин • Замен АКБ: ${sc.single_drone.battery_swaps}</div>
           <div class="scenario-metric">Износ ТО: ${sc.single_drone.to_wear_score}</div>
         </div>
         <div class="scenario-pill">
-          <strong>${sc.parallel_fleet.name}</strong>
+          <strong>${escapeHtml(sc.parallel_fleet.name)}</strong>
           <div class="scenario-metric">Время: ${sc.parallel_fleet.makespan_min} мин • Замен АКБ: ${sc.parallel_fleet.battery_swaps}</div>
           <div class="scenario-metric">Износ ТО: ${sc.parallel_fleet.to_wear_score}</div>
         </div>
@@ -781,7 +1036,7 @@ function renderMissionResults(plan) {
         <div class="obstacle-badge-list">
           ${plan.obstacle_analysis.map(o => `
             <span class="obstacle-tag ${o.status === 'SAFE_OVERFLIGHT' ? 'safe' : ''}">
-              ${o.status === 'SAFE_OVERFLIGHT' ? '✓' : '⚠️'} ${o.name} (H=${o.height_m}м, ${o.status === 'SAFE_OVERFLIGHT' ? 'перелёт +' + o.clearance_m + 'м' : 'облет 70м'})
+              ${o.status === 'SAFE_OVERFLIGHT' ? '✓' : '⚠️'} ${escapeHtml(o.name)} (H=${o.height_m}м, ${o.status === 'SAFE_OVERFLIGHT' ? 'перелёт +' + o.clearance_m + 'м' : 'облет 70м'})
             </span>
           `).join('')}
         </div>
@@ -799,23 +1054,34 @@ function renderMissionResults(plan) {
   };
 
   const legendContainer = document.getElementById("legendItems");
-  legendContainer.innerHTML = "";
+  legendContainer.replaceChildren();
+
+  const alternative = Object.values(comparisonPlans).find(candidate => candidate !== plan);
+  if (alternative && document.getElementById("showAlternativeRoute").checked) {
+    alternative.drone_plans.forEach(dp => {
+      const coords = dp.geojson_linestring.coordinates.map(c => [c[1], c[0]]);
+      const line = L.polyline(coords, { color: "#7c3aed", weight: 2, opacity: 0.7, dashArray: "3, 7" }).addTo(map);
+      currentSwathLayers.push(line);
+    });
+  }
 
   plan.drone_plans.forEach((dp) => {
     const color = colors[dp.drone_id] || "#181825";
     const lineCoords = dp.geojson_linestring.coordinates.map(c => [c[1], c[0]]);
+    const routeLayers = [];
 
     const polyline = L.polyline(lineCoords, {
-      color: color,
-      weight: dp.drone_type === "fixed_wing" ? 3.5 : 2.5,
-      opacity: 0.9,
-      dashArray: dp.drone_type === "fixed_wing" ? null : "6, 4"
+      color: "#64748b",
+      weight: 2,
+      opacity: 0.7,
+      dashArray: "5, 5"
     }).addTo(map);
+    routeLayers.push(polyline);
 
     polyline.bindPopup(`
       <div style="font-size:12px; font-family:Inter, sans-serif; line-height:1.5;">
-        <strong>✈️ ${dp.drone_name}</strong><br>
-        <b>Сенсор:</b> ${dp.sensor_name || 'RGB'}<br>
+        <strong>${escapeHtml(dp.drone_name)}</strong><br>
+        <b>Сенсор:</b> ${escapeHtml(dp.sensor_name || 'RGB')}<br>
         <b>Высота полета H:</b> ${dp.flight_height_m} м<br>
         <b>Дистанция:</b> ${dp.distance_km} км | <b>Время:</b> ${dp.flight_time_min} мин<br>
         <b>Расход батареи:</b> ${dp.battery_used_pct}%, ост. ${dp.battery_remaining_pct}%<br>
@@ -825,6 +1091,17 @@ function renderMissionResults(plan) {
 
     currentSwathLayers.push(polyline);
 
+    if (dp.waypoints.length === lineCoords.length) {
+      for (let i = 0; i < dp.waypoints.length - 1; i++) {
+        if (dp.waypoints[i].stage !== "SURVEY_LINE" || dp.waypoints[i + 1].stage !== "SURVEY_LINE_END") continue;
+        const surveyLine = L.polyline([lineCoords[i], lineCoords[i + 1]], {
+          color, weight: 3.5, opacity: 0.95
+        }).addTo(map);
+        routeLayers.push(surveyLine);
+        currentSwathLayers.push(surveyLine);
+      }
+    }
+
     // Маркер старта ВПП
     const startWp = dp.waypoints[0];
     const marker = L.circleMarker([startWp.lat, startWp.lon], {
@@ -833,27 +1110,52 @@ function renderMissionResults(plan) {
       fillColor: "#ffffff",
       fillOpacity: 1,
       weight: 3
-    }).bindPopup(`<b>${dp.drone_name}</b><br>Точка старта ВПП (${dp.drone_type === 'fixed_wing' ? 'Катапульта' : 'VTOL'})`);
+    }).bindPopup(`<b>${escapeHtml(dp.drone_name)}</b><br>Точка старта (${dp.drone_type === 'fixed_wing' ? 'Катапульта' : 'VTOL'})`);
     marker.addTo(map);
     currentSwathLayers.push(marker);
+    routeLayers.push(marker);
 
-    const row = document.createElement("div");
+    const row = document.createElement("label");
     row.className = "legend-row";
-    row.innerHTML = `
-      <div class="legend-color-dot" style="background-color: ${color}"></div>
-      <span><b>${dp.drone_name}</b> [${dp.sensor_name ? dp.sensor_name.split(' ')[0] : 'RGB'}] (${dp.flight_time_min} мин, ост. ${dp.battery_remaining_pct}%)</span>
-    `;
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.addEventListener("change", () => routeLayers.forEach(layer => {
+      if (checkbox.checked) layer.addTo(map);
+      else map.removeLayer(layer);
+    }));
+    const dot = document.createElement("span");
+    dot.className = "legend-color-dot";
+    dot.style.backgroundColor = color;
+    const description = document.createElement("span");
+    description.textContent = `${dp.drone_name} · ${dp.sensor_name || "RGB"} · вылет ${dp.sortie_index || 1} · ${dp.flight_time_min} мин · остаток ${dp.battery_remaining_pct}%`;
+    row.append(checkbox, dot, description);
     legendContainer.appendChild(row);
   });
+
+  const key = document.createElement("div");
+  key.className = "legend-key";
+  key.textContent = "Цветные линии — съёмка · серый пунктир — перелёт · фиолетовый — альтернатива";
+  legendContainer.appendChild(key);
 
   document.getElementById("mapLegend").style.display = "block";
 
   initSimulation(plan);
+  const routeBounds = L.featureGroup(currentSwathLayers).getBounds();
+  if (routeBounds.isValid()) {
+    const desktop = window.innerWidth > 900;
+    map.fitBounds(routeBounds, {
+      paddingTopLeft: desktop ? [document.body.classList.contains("panel-collapsed") ? 35 : 405, 80] : [20, 20],
+      paddingBottomRight: desktop ? [25, Math.min(document.getElementById("statsRibbon").offsetHeight + 30, 430)] : [20, 20],
+      maxZoom: 16
+    });
+  }
 }
 
 // 10. 4D СИМУЛЯЦИЯ ПОЛЕТА ГРУППЫ БВС
 function initSimulation(plan) {
-  simMaxSeconds = plan.metrics.makespan_min * 60.0;
+  simMaxSeconds = Math.max(plan.metrics.makespan_min * 60.0,
+    ...plan.drone_plans.map(dp => (dp.start_time_s || 0) + dp.flight_time_s));
   document.getElementById("simTotalTime").innerText = formatTime(simMaxSeconds);
   document.getElementById("simCurrentTime").innerText = "00:00";
   document.getElementById("timeSlider").value = 0;
@@ -867,7 +1169,8 @@ function initSimulation(plan) {
   const statusContainer = document.getElementById("droneLiveStatuses");
   statusContainer.innerHTML = "";
 
-  plan.drone_plans.forEach((dp) => {
+  plan.drone_plans.forEach((dp, index) => {
+    const markerId = `${dp.drone_id}_${index}`;
     const startPt = dp.waypoints[0];
     const marker = L.circleMarker([startPt.lat, startPt.lon], {
       radius: 7,
@@ -877,17 +1180,17 @@ function initSimulation(plan) {
       weight: 2.5
     }).addTo(map);
 
-    simDroneMarkers[dp.drone_id] = {
+    simDroneMarkers[markerId] = {
       marker: marker,
       plan: dp
     };
 
     const statusTag = document.createElement("div");
     statusTag.className = "status-chip";
-    statusTag.id = `status_${dp.drone_id}`;
+    statusTag.id = `status_${markerId}`;
     statusTag.innerHTML = `
       <div class="chip-dot"></div>
-      <span><b>${dp.drone_name}:</b> <span class="tag-stage">Готов к вылету</span></span>
+      <span><b>${escapeHtml(dp.drone_name)} (вылет ${dp.sortie_index || 1}):</b> <span class="tag-stage">Готов к вылету</span></span>
     `;
     statusContainer.appendChild(statusTag);
   });
@@ -936,27 +1239,43 @@ function updateSimulationFrame() {
     "LANDING": "Посадка (Парашют / VTOL)"
   };
 
-  Object.keys(simDroneMarkers).forEach((droneId) => {
-    const { marker, plan } = simDroneMarkers[droneId];
+  Object.keys(simDroneMarkers).forEach((markerId) => {
+    const { marker, plan } = simDroneMarkers[markerId];
     const waypoints = plan.waypoints;
     const totalTime = plan.flight_time_s;
+    const localTime = simCurrentSeconds - (plan.start_time_s || 0);
 
     let targetLat = waypoints[0].lat;
     let targetLon = waypoints[0].lon;
     let currentStage = "Ожидание старта";
 
-    if (simCurrentSeconds >= totalTime) {
+    if (localTime >= totalTime) {
       const lastWp = waypoints[waypoints.length - 1];
       targetLat = lastWp.lat;
       targetLon = lastWp.lon;
       currentStage = "Миссия завершена (Посадка)";
-    } else {
-      const progress = simCurrentSeconds / totalTime;
-      const targetIdx = Math.floor(progress * (waypoints.length - 1));
+    } else if (localTime >= 0) {
+      const times = plan.waypoint_times_s;
+      let targetIdx;
+      let subProgress;
+      if (times && times.length === waypoints.length) {
+        let low = 0;
+        let high = times.length - 2;
+        while (low < high) {
+          const mid = Math.floor((low + high + 1) / 2);
+          if (times[mid] <= localTime) low = mid;
+          else high = mid - 1;
+        }
+        targetIdx = low;
+        const duration = times[targetIdx + 1] - times[targetIdx];
+        subProgress = duration > 0 ? Math.max(0, Math.min(1, (localTime - times[targetIdx]) / duration)) : 1;
+      } else {
+        const progress = localTime / totalTime;
+        targetIdx = Math.min(waypoints.length - 2, Math.floor(progress * (waypoints.length - 1)));
+        subProgress = (progress * (waypoints.length - 1)) - targetIdx;
+      }
       const wp1 = waypoints[targetIdx];
       const wp2 = waypoints[Math.min(targetIdx + 1, waypoints.length - 1)];
-
-      const subProgress = (progress * (waypoints.length - 1)) - targetIdx;
       targetLat = wp1.lat + (wp2.lat - wp1.lat) * subProgress;
       targetLon = wp1.lon + (wp2.lon - wp1.lon) * subProgress;
       const label = stageLabels[wp1.stage] || wp1.stage;
@@ -965,7 +1284,7 @@ function updateSimulationFrame() {
 
     marker.setLatLng([targetLat, targetLon]);
 
-    const tag = document.querySelector(`#status_${droneId} .tag-stage`);
+    const tag = document.querySelector(`#status_${markerId} .tag-stage`);
     if (tag) tag.innerText = currentStage;
   });
 }
@@ -978,39 +1297,36 @@ function formatTime(seconds) {
 
 // 11. ЭКСПОРТ РЕЗУЛЬТАТОВ
 async function exportKml() {
-  if (!currentMissionPlan) return;
-  const dp = currentMissionPlan.drone_plans[0];
-  const res = await fetch(`${API_BASE}/api/export/kml`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dp)
-  });
-  const blob = await res.blob();
-  downloadBlob(blob, `mission_${dp.drone_id}.kml`);
+  await exportMission("kml", "kml");
 }
 
 async function exportGeoJson() {
-  if (!currentMissionPlan) return;
-  const dp = currentMissionPlan.drone_plans[0];
-  const res = await fetch(`${API_BASE}/api/export/geojson`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dp)
-  });
-  const blob = await res.blob();
-  downloadBlob(blob, `mission_${dp.drone_id}.geojson`);
+  await exportMission("geojson", "geojson");
 }
 
 async function exportPlan() {
-  if (!currentMissionPlan) return;
-  const dp = currentMissionPlan.drone_plans[0];
-  const res = await fetch(`${API_BASE}/api/export/qgc`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dp)
-  });
-  const blob = await res.blob();
-  downloadBlob(blob, `mission_${dp.drone_id}.plan`);
+  await exportMission("qgc", "plan");
+}
+
+async function exportMission(endpoint, extension) {
+  if (!currentMissionPlan) {
+    showMissionMessage("Сначала рассчитайте допустимый маршрут.");
+    return;
+  }
+  try {
+    const plans = currentMissionPlan.drone_plans;
+    const multiple = plans.length > 1;
+    const res = await fetch(`${API_BASE}/api/export/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(multiple ? plans : plans[0])
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    downloadBlob(blob, multiple ? `missions_${extension}.zip` : `mission_${plans[0].drone_id}.${extension}`);
+  } catch (err) {
+    showMissionMessage(`Экспорт не удался: ${err.message}`);
+  }
 }
 
 function downloadBlob(blob, filename) {
@@ -1021,5 +1337,5 @@ function downloadBlob(blob, filename) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000);
 }

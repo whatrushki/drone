@@ -1,8 +1,11 @@
 import math
+import time
+from itertools import combinations
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
-from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
+from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box, shape
 from shapely.affinity import rotate, translate
+from shapely.ops import transform, unary_union
 import pyproj
 from .models import DroneSpec, SensorSpec, LaunchPoint, WindConfig, GEOSCAN_DRONE_CATALOG, SENSOR_CATALOG
 from .photogrammetry import calculate_photogrammetry
@@ -387,15 +390,50 @@ def two_opt_tour(
     best_tour = list(tour)
     best_score = score_full_tour(best_tour, base_utm, drone_type, turn_radius_m)
     N = len(best_tour)
-    if N <= 2:
+    if N <= 2 or N > 60:
         return best_tour
     improved = True
     iterations = 0
+
+    def transition(left, right):
+        ls, le = left
+        rs, re = right
+        ld = (le[0] - ls[0], le[1] - ls[1])
+        rd = (re[0] - rs[0], re[1] - rs[1])
+        ll = max(1e-3, math.hypot(*ld))
+        rl = max(1e-3, math.hypot(*rd))
+        return calc_transition_cost(
+            le, (ld[0] / ll, ld[1] / ll),
+            rs, (rd[0] / rl, rd[1] / rl),
+            drone_type, turn_radius_m,
+        )
+
+    def base_distance(point):
+        return math.hypot(base_utm[0] - point[0], base_utm[1] - point[1])
+
     while improved and iterations < max_iter:
         improved = False
         iterations += 1
         for i in range(N - 1):
             for j in range(i + 1, N):
+                reversed_first = (best_tour[j][1], best_tour[j][0])
+                reversed_last = (best_tour[i][1], best_tour[i][0])
+                old_boundary = (
+                    base_distance(best_tour[0][0]) if i == 0
+                    else transition(best_tour[i - 1], best_tour[i])
+                ) + (
+                    base_distance(best_tour[-1][1]) if j == N - 1
+                    else transition(best_tour[j], best_tour[j + 1])
+                )
+                new_boundary = (
+                    base_distance(reversed_first[0]) if i == 0
+                    else transition(best_tour[i - 1], reversed_first)
+                ) + (
+                    base_distance(reversed_last[1]) if j == N - 1
+                    else transition(reversed_last, best_tour[j + 1])
+                )
+                if best_score - old_boundary + new_boundary >= best_score - 1.0:
+                    continue
                 rev_segment = [(pe, ps) for (ps, pe) in reversed(best_tour[i:j + 1])]
                 new_tour = best_tour[:i] + rev_segment + best_tour[j + 1:]
                 new_score = score_full_tour(new_tour, base_utm, drone_type, turn_radius_m)
@@ -408,28 +446,95 @@ def two_opt_tour(
                 break
     return best_tour
 
+
+def exact_swath_tour_for_base(
+    swaths: List[List[Tuple[float, float]]],
+    base_utm: Tuple[float, float],
+    drone_type: str,
+    turn_radius_m: float,
+) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """Minimum approximate transit cost for all orders and directions (N <= 9)."""
+    oriented = [[(swath[0], swath[-1]), (swath[-1], swath[0])]
+                for swath in swaths]
+    n = len(swaths)
+    dp = {}
+    parent = {}
+
+    def transition(left, right):
+        start_a, end_a = left
+        start_b, end_b = right
+        da = (end_a[0] - start_a[0], end_a[1] - start_a[1])
+        db = (end_b[0] - start_b[0], end_b[1] - start_b[1])
+        la = max(1e-3, math.hypot(*da))
+        lb = max(1e-3, math.hypot(*db))
+        return calc_transition_cost(
+            end_a, (da[0] / la, da[1] / la),
+            start_b, (db[0] / lb, db[1] / lb),
+            drone_type, turn_radius_m,
+        )
+
+    for idx in range(n):
+        for direction in (0, 1):
+            point = oriented[idx][direction][0]
+            dp[(1 << idx, idx, direction)] = math.hypot(
+                point[0] - base_utm[0], point[1] - base_utm[1]
+            )
+
+    full_mask = (1 << n) - 1
+    for mask in range(1, full_mask + 1):
+        for last in range(n):
+            if not mask & (1 << last):
+                continue
+            for direction in (0, 1):
+                state = (mask, last, direction)
+                cost = dp.get(state)
+                if cost is None:
+                    continue
+                for nxt in range(n):
+                    if mask & (1 << nxt):
+                        continue
+                    next_mask = mask | (1 << nxt)
+                    for next_direction in (0, 1):
+                        next_state = (next_mask, nxt, next_direction)
+                        new_cost = cost + transition(oriented[last][direction], oriented[nxt][next_direction])
+                        if new_cost < dp.get(next_state, math.inf):
+                            dp[next_state] = new_cost
+                            parent[next_state] = state
+
+    best_state = min(
+        ((full_mask, last, direction) for last in range(n) for direction in (0, 1)),
+        key=lambda state: dp[state] + math.hypot(
+            oriented[state[1]][state[2]][1][0] - base_utm[0],
+            oriented[state[1]][state[2]][1][1] - base_utm[1],
+        ),
+    )
+    tour = []
+    state = best_state
+    while True:
+        _, last, direction = state
+        tour.append(oriented[last][direction])
+        if state not in parent:
+            break
+        state = parent[state]
+    tour.reverse()
+    return tour
+
+
 def optimize_swath_tour_for_base(
     swaths: List[List[Tuple[float, float]]],
     base_utm: Tuple[float, float],
     drone_type: str = "fixed_wing",
     turn_radius_m: float = 85.0
 ) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
-    """
-    Интеллектуальная оптимизация порядка и направления галсов с жесткой привязкой к базе.
-    Решает задачу Base-Aware Swath TSP с кинематическими ограничениями:
-    - Съемка начинается строго в ближайшей к базе точке полигона (минимальный подлет).
-    - Первый галс идет ОТ базы вглубь полигона.
-    - Все межгалсовые переходы локальные (полностью исключены сквозные диагональные черты).
-    - Окончание последнего галса выводит прямо к базе на посадку.
+    """Minimize estimated transit cost over swath orders and directions.
+
+    The search is exact for at most nine swaths and heuristic for larger fields.
+    Final mission selection uses measured route time after path construction.
     """
     if not swaths:
         return []
-    if len(swaths) == 1:
-        s = swaths[0]
-        d0 = math.hypot(base_utm[0] - s[0][0], base_utm[1] - s[0][1])
-        d1 = math.hypot(base_utm[0] - s[-1][0], base_utm[1] - s[-1][1])
-        return [(s[0], s[-1])] if d0 <= d1 else [(s[-1], s[0])]
-
+    if len(swaths) <= 9:
+        return exact_swath_tour_for_base(swaths, base_utm, drone_type, turn_radius_m)
     N = len(swaths)
     start_candidates = []
     for idx, s in enumerate(swaths):
@@ -442,7 +547,8 @@ def optimize_swath_tour_for_base(
     best_overall_tour = None
     best_overall_cost = 1e12
 
-    for init_dist, first_idx, first_dir in start_candidates[:min(6, len(start_candidates))]:
+    start_limit = 2 if N > 60 else 6
+    for init_dist, first_idx, first_dir in start_candidates[:min(start_limit, len(start_candidates))]:
         unvisited = set(range(N))
         tour = []
         s = swaths[first_idx]
@@ -494,7 +600,7 @@ def compute_optimal_sweep_angle(
     drone_turn_radius_m: float = 85.0
 ) -> float:
     """
-    Интеллектуальный расчет глобально оптимального угла прокладки галсов:
+    Эвристический выбор угла прокладки галсов из конечного набора кандидатов:
     1. Если пользователь явно задал угол (override >= 0), используется он.
     2. Если задан -1.0 ('axis'), строго берется главная продольная ось полигона.
     3. По умолчанию (режим 'auto'):
@@ -507,7 +613,7 @@ def compute_optimal_sweep_angle(
            автопилотом и подвесом (штраф = 0). Лишь при сильном ветре (> 5.5 м/с) штраф квадратично
            возрастает, балансируя ориентацию ближе к ветру.
          * Base Transit: штраф за расстояние до базы.
-       - Выбирается угол с глобальным минимумом общего времени полета и перерасхода батареи.
+       - Выбирается угол с минимальной оценкой стоимости среди проверенных углов.
     """
     if sweep_angle_override is not None and sweep_angle_override >= 0.0:
         return float(sweep_angle_override) % 180.0
@@ -603,7 +709,8 @@ def compute_optimal_sweep_angle(
 def plan_coverage_swaths(
     polygon_utm: Polygon,
     line_spacing_m: float,
-    sweep_angle_deg: float
+    sweep_angle_deg: float,
+    phase: float = 0.5,
 ) -> List[List[Tuple[float, float]]]:
     """
     Нарезает непрерывные параллельные галсы вдоль полигона.
@@ -612,7 +719,7 @@ def plan_coverage_swaths(
     poly_rot = rotate(polygon_utm, -sweep_angle_deg, origin='centroid')
     minx, miny, maxx, maxy = poly_rot.bounds
     
-    y = miny + line_spacing_m / 2.0
+    y = miny + line_spacing_m * phase
     swaths = []
     
     while y <= maxy:
@@ -647,6 +754,18 @@ def plan_coverage_swaths(
 
     return swaths
 
+
+def coverage_ratio_for_swaths(
+    polygon_utm: Polygon,
+    swaths: List[List[Tuple[float, float]]],
+    footprint_width_m: float,
+) -> float:
+    if not swaths or polygon_utm.area <= 0:
+        return 0.0
+    footprints = [LineString(swath).buffer(footprint_width_m / 2.0, cap_style=2)
+                  for swath in swaths]
+    return polygon_utm.intersection(unary_union(footprints)).area / polygon_utm.area
+
 def generate_feasibility_assessment(
     compatible_drones: List[DroneSpec],
     drone_plans: List[Dict[str, Any]],
@@ -665,7 +784,10 @@ def generate_feasibility_assessment(
     - Анализ холостых перелетов vs параллельного флота
     - Расход ресурса до ТО по официальным регламентам Геоскана
     """
-    active_drones_count = len(drone_plans)
+    sorties_by_drone = {}
+    for plan in drone_plans:
+        sorties_by_drone[plan["drone_id"]] = sorties_by_drone.get(plan["drone_id"], 0) + 1
+    active_drones_count = len(sorties_by_drone)
     
     # 1. Проверка лимитов пользователя
     time_feasible = True
@@ -682,28 +804,15 @@ def generate_feasibility_assessment(
             drones_feasible = False
             drones_delta = active_drones_count - max_available_drones
             
-    is_overall_feasible = time_feasible and drones_feasible
+    is_overall_feasible = time_feasible and drones_feasible and all(
+        plan["is_energy_safe"] for plan in drone_plans
+    )
     
     # 2. Проверка ресурса АКБ и вылетов на замену
-    sorties_needed = 0
-    battery_swaps = 0
-    for p in drone_plans:
-        drone_spec = GEOSCAN_DRONE_CATALOG.get(p["drone_id"])
-        if drone_spec:
-            endurance = drone_spec.max_flight_time_min
-            t_plan = p["flight_time_min"]
-            s_count = max(1, int(math.ceil(t_plan / (endurance * 0.85))))
-            sorties_needed += s_count
-            battery_swaps += (s_count - 1)
+    sorties_needed = len(drone_plans)
+    battery_swaps = sum(max(0, count - 1) for count in sorties_by_drone.values())
             
-    # 3. Анализ сценариев (ответ экспертам Геоскана: 1 дрон vs 2 дрона)
-    best_single = compatible_drones[0] if compatible_drones else None
-    scenario_1_time_min = round(total_fleet_time_min * 0.95, 1)
-    scenario_1_battery_swaps = max(0, int(math.ceil(scenario_1_time_min / (best_single.max_flight_time_min * 0.85))) - 1) if best_single else 0
-    scenario_1_total_elapsed_min = scenario_1_time_min + scenario_1_battery_swaps * battery_swap_penalty_min
-    scenario_2_time_min = round(scenario_1_time_min / 1.85, 1)
-    
-    # 4. Расход ресурса до ТО по официальным нормативам Геоскана:
+    # 3. Расход ресурса до ТО по нормативам каталога:
     # 201, 401 - каждые 80 полетов
     # 501, 801 - каждые 160 часов
     # 701 - каждые 100 моточасов
@@ -757,9 +866,9 @@ def generate_feasibility_assessment(
         advice_lines.append("Все борта выполнят миссию на одном заряде АКБ (без посадок на подзарядку).")
 
     if active_drones_count == 1:
-        advice_lines.append(f"Режим 1 борта: минимальный износ ТО и нулевой перерасход на холостые перелеты.")
+        advice_lines.append("План задействует один БВС.")
     else:
-        advice_lines.append(f"Параллельная работа {active_drones_count} бортов сократила длительность до {makespan_min:.1f} мин.")
+        advice_lines.append(f"План задействует {active_drones_count} БВС; длительность {makespan_min:.1f} мин.")
 
     return {
         "is_feasible": is_overall_feasible,
@@ -773,26 +882,11 @@ def generate_feasibility_assessment(
         "battery_sorties_total": sorties_needed,
         "battery_swaps_needed": battery_swaps,
         "advisor_summary": " ".join(advice_lines),
-        "fleet_scenarios": {
-            "single_drone": {
-                "name": "1 борт (Минимум холостых перелетов и ТО)",
-                "drones_count": 1,
-                "makespan_min": scenario_1_total_elapsed_min,
-                "battery_swaps": scenario_1_battery_swaps,
-                "to_wear_score": "Минимальный (1 вылет)"
-            },
-            "parallel_fleet": {
-                "name": f"Параллельный флот ({active_drones_count} БВС)",
-                "drones_count": active_drones_count,
-                "makespan_min": makespan_min,
-                "battery_swaps": battery_swaps,
-                "to_wear_score": f"Умеренный ({active_drones_count} вылетов)"
-            }
-        },
+        "fleet_scenarios": None,
         "maintenance_impact": to_impact
     }
 
-def plan_multi_uav_mission(
+def _plan_mission_candidate(
     polygon_geojson: dict,
     sensor: SensorSpec,
     drones: List[DroneSpec],
@@ -805,32 +899,36 @@ def plan_multi_uav_mission(
     sweep_angle_deg: Optional[float] = None,
     max_allowed_time_min: Optional[float] = None,
     max_available_drones: Optional[int] = None,
-    battery_swap_penalty_min: float = 15.0
+    battery_swap_penalty_min: float = 15.0,
+    assignment_split: Optional[int] = None,
+    overlap_forward: Optional[float] = None,
+    overlap_side: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Главный конвейер планирования полетных заданий для группы БВС Геоскан
     """
     # 1. Фотограмметрический расчет
-    photo_params = calculate_photogrammetry(sensor, target_gsd_cm)
+    photo_params = calculate_photogrammetry(sensor, target_gsd_cm, overlap_forward, overlap_side)
     flight_height_m = photo_params["flight_height_m"]
     line_spacing_m = photo_params["line_spacing_m"]
     trigger_dist_m = photo_params["trigger_dist_m"]
     
-    # Извлечение координат полигона съемки
+    # Сохраняем все компоненты и внутренние вырезы GeoJSON.
     geom = polygon_geojson.get("geometry", polygon_geojson)
-    coords = geom.get("coordinates", [])
-    if geom.get("type") == "Polygon":
-        poly_wgs = Polygon(coords[0])
-    elif geom.get("type") == "MultiPolygon":
-        poly_wgs = Polygon(coords[0][0])
-    else:
-        raise ValueError("Unsupported geometry type")
+    if geom.get("type") not in ("Polygon", "MultiPolygon"):
+        return {"error": "Нужен полигон или мультиполигон GeoJSON"}
+    try:
+        poly_wgs = shape(geom)
+    except (TypeError, ValueError, IndexError):
+        return {"error": "Некорректная геометрия области съемки"}
+    if not poly_wgs.is_valid or poly_wgs.is_empty or poly_wgs.area <= 0:
+        return {"error": "Область съемки пуста или имеет некорректную геометрию"}
         
     c_lon, c_lat = poly_wgs.centroid.x, poly_wgs.centroid.y
     to_utm, to_wgs = get_utm_transformer(c_lon, c_lat)
     
     # Полигон в метрах UTM
-    poly_utm = Polygon([to_utm(x, y) for x, y in poly_wgs.exterior.coords])
+    poly_utm = transform(to_utm, poly_wgs)
     
     # Анализ 3D препятствий и расчет безопасного обхода
     obstacle_analysis = []
@@ -879,7 +977,8 @@ def plan_multi_uav_mission(
         # Автоматическое создание ВПП на безопасном удалении 250 м от границы полигона с наветренной стороны
         rad_wind = math.radians(wind.direction_deg)
         wind_dir_vec = np.array([math.sin(rad_wind), math.cos(rad_wind)])
-        poly_pts = np.array(poly_utm.exterior.coords)
+        base_polygon = max(poly_utm.geoms, key=lambda part: part.area) if isinstance(poly_utm, MultiPolygon) else poly_utm
+        poly_pts = np.array(base_polygon.exterior.coords)
         projs = np.dot(poly_pts, -wind_dir_vec)
         best_pt_idx = int(np.argmax(projs))
         border_pt = poly_pts[best_pt_idx]
@@ -891,7 +990,9 @@ def plan_multi_uav_mission(
             LaunchPoint(id="pad_emerg", name="Резервная площадка Восток", lon=base_lon + 0.008, lat=base_lat + 0.003, type="emergency_pad")
         ]
         
-    base = launch_points[0]
+    base = next((point for point in launch_points if point.type == "base"), None)
+    if base is None:
+        return {"error": "Нужна хотя бы одна точка старта типа base"}
     base_utm = to_utm(base.lon, base.lat)
 
     # 3. Выбор профессионального угла галсов (с учетом базы, формы полигона, разворотов и ветра)
@@ -905,7 +1006,12 @@ def plan_multi_uav_mission(
     )
     
     # Нарезка всех галсов съемки с учетом вырезок препятствий
-    all_swaths = plan_coverage_swaths(poly_survey, line_spacing_m, optimal_angle)
+    phase_candidates = []
+    for phase in (0.1, 0.3, 0.5, 0.7, 0.9):
+        swaths = plan_coverage_swaths(poly_survey, line_spacing_m, optimal_angle, phase)
+        coverage = coverage_ratio_for_swaths(poly_survey, swaths, photo_params["footprint_w_m"])
+        phase_candidates.append((coverage >= 0.99, coverage, -len(swaths), phase, swaths))
+    _, _, _, sweep_phase, all_swaths = max(phase_candidates, key=lambda item: item[:3])
     if not all_swaths:
         return {"error": "Полигон слишком мал для выбранного шага галсов"}
         
@@ -923,6 +1029,8 @@ def plan_multi_uav_mission(
             reasons.append(f"не поддерживает сенсор {sensor.name}")
         elif flight_height_m < d.min_operational_height_m:
             reasons.append(f"высота полета {flight_height_m:.1f}м ниже мин. безопасной {d.min_operational_height_m:.1f}м")
+        if wind.speed_ms > d.max_wind_resistance:
+            reasons.append(f"ветер {wind.speed_ms:.1f} м/с выше допустимых {d.max_wind_resistance:.1f} м/с")
             
         if not reasons:
             compatible_drones.append(d)
@@ -930,19 +1038,7 @@ def plan_multi_uav_mission(
             fleet_rejections[d.id] = reasons
             
     if not compatible_drones:
-        catalog_candidates = [
-            d for d in GEOSCAN_DRONE_CATALOG.values()
-            if sensor.id in d.sensors_supported and flight_height_m >= d.min_operational_height_m
-        ]
-        if catalog_candidates:
-            catalog_candidates.sort(key=lambda d: -d.cruise_speed)
-            compatible_drones = [catalog_candidates[0]]
-        else:
-            fallback = [d for d in GEOSCAN_DRONE_CATALOG.values() if sensor.id in d.sensors_supported]
-            if fallback:
-                compatible_drones = [fallback[0]]
-            else:
-                return {"error": f"В каталоге Геоскан нет БВС, совместимых с сенсором {sensor.name}"}
+        return {"error": f"Среди выбранных БВС нет совместимых с сенсором {sensor.name} и высотой {flight_height_m:.1f} м"}
 
     # Учет ограничения пользователя по максимальному числу активных бортов
     if max_available_drones is not None and max_available_drones > 0:
@@ -994,12 +1090,20 @@ def plan_multi_uav_mission(
         num_d = len(sorted_drones)
         num_s = len(ordered_swaths)
         
-        if num_d == 2:
+        if num_s < num_d:
+            sorted_drones = sorted(sorted_drones, key=lambda d: -d.cruise_speed)[:num_s]
+            num_d = len(sorted_drones)
+
+        if num_d == 1:
+            drone_assignments = [(sorted_drones[0], ordered_swaths)]
+        elif num_d == 2:
             d1, d2 = sorted_drones[0], sorted_drones[1]
             best_split = max(1, int(num_s * (d1.cruise_speed / (d1.cruise_speed + d2.cruise_speed))))
             best_makespan = 1e9
             
-            for split in range(1, num_s):
+            for split in ([assignment_split] if assignment_split is not None else range(1, num_s)):
+                if split is None or not 1 <= split < num_s:
+                    continue
                 s1 = ordered_swaths[:split]
                 s2 = ordered_swaths[split:]
                 t1 = quick_estimate_drone_mission_time(s1, d1, base_utm, wind)
@@ -1027,13 +1131,35 @@ def plan_multi_uav_mission(
                 if chunk:
                     drone_assignments.append((d, chunk))
 
+    # Делим длинную работу на реальные вылеты с возвращением на базу.
+    expanded_assignments = []
+    for drone, swaths in drone_assignments:
+        if not swaths:
+            continue
+        safe_seconds = 60.0 * drone.max_flight_time_min * max(
+            0.0, drone.battery_level - drone.reserve_battery_pct
+        ) / 100.0
+        estimate_budget = safe_seconds * 0.7
+        batch = []
+        for swath in swaths:
+            proposed = batch + [swath]
+            if batch and quick_estimate_drone_mission_time(proposed, drone, base_utm, wind) > estimate_budget:
+                expanded_assignments.append((drone, batch))
+                batch = [swath]
+            else:
+                batch = proposed
+        if batch:
+            expanded_assignments.append((drone, batch))
+
     # 5. Формирование траекторий, ключевых точек (Waypoints) и экспорта
     drone_plans = []
     total_fleet_flight_time_s = 0.0
     total_fleet_distance_m = 0.0
     makespan_s = 0.0
     
-    for drone, swaths in drone_assignments:
+    sortie_counts = {}
+    for drone, swaths in expanded_assignments:
+        sortie_counts[drone.id] = sortie_counts.get(drone.id, 0) + 1
         waypoints = []
         path_utm_pts = []
         flight_distance_m = 0.0
@@ -1044,6 +1170,8 @@ def plan_multi_uav_mission(
         directed_swaths = optimize_swath_tour_for_base(
             swaths, base_utm, drone_type=drone.type, turn_radius_m=drone.turn_radius
         )
+        if not directed_swaths:
+            continue
         first_p_start, first_p_end = directed_swaths[0]
         last_p_start, last_p_end = directed_swaths[-1]
         
@@ -1258,6 +1386,26 @@ def plan_multi_uav_mission(
             path_utm_pts.append(base_utm)
 
         
+        # Метрики считаются по той же полилинии, которая попадет в экспорт.
+        # Это включает последний участок возвращения к базе.
+        flight_distance_m = 0.0
+        flight_time_s = 0.0
+        battery_spent_pct = 0.0
+        waypoint_times_s = [0.0]
+        for idx in range(1, len(path_utm_pts)):
+            leg_speed = waypoints[idx]["speed_ms"] or drone.cruise_speed
+            leg = calculate_flight_leg_utm(
+                path_utm_pts[idx - 1], path_utm_pts[idx], leg_speed,
+                wind.speed_ms, wind.direction_deg, drone.type,
+                drone.max_flight_time_min
+            )
+            if not math.isfinite(leg["time_s"]):
+                return {"error": f"Ветер делает маршрут БВС {drone.name} невыполнимым"}
+            flight_distance_m += leg["distance_m"]
+            flight_time_s += leg["time_s"]
+            battery_spent_pct += leg["battery_used_pct"]
+            waypoint_times_s.append(round(flight_time_s, 2))
+
         # GeoJSON LineString маршрута
         route_coords = [list(to_wgs(pt[0], pt[1])) + [flight_height_m] for pt in path_utm_pts]
         
@@ -1276,6 +1424,7 @@ def plan_multi_uav_mission(
         plan_item = {
             "drone_id": drone.id,
             "drone_name": drone.name,
+            "sortie_index": sortie_counts[drone.id],
             "drone_type": drone.type,
             "sensor_id": sensor.id,
             "sensor_name": sensor.name,
@@ -1290,6 +1439,7 @@ def plan_multi_uav_mission(
             "is_energy_safe": is_safe,
             "maintenance_info": maintenance_info,
             "waypoints": waypoints,
+            "waypoint_times_s": waypoint_times_s,
             "geojson_linestring": {
                 "type": "LineString",
                 "coordinates": route_coords
@@ -1302,12 +1452,36 @@ def plan_multi_uav_mission(
         if flight_time_s > makespan_s:
             makespan_s = flight_time_s
 
-    # Проверка лимита 150 м (Постановление Правительства РФ № 138)
+    # Один БВС выполняет собственные вылеты последовательно.
+    elapsed_by_drone = {}
+    for plan in drone_plans:
+        elapsed_by_drone[plan["drone_id"]] = elapsed_by_drone.get(plan["drone_id"], 0.0) + plan["flight_time_s"]
+    for drone_id in elapsed_by_drone:
+        sorties = sortie_counts[drone_id]
+        elapsed_by_drone[drone_id] += max(0, sorties - 1) * battery_swap_penalty_min * 60.0
+    makespan_s = max(elapsed_by_drone.values(), default=0.0)
+
+    footprints = []
+    half_footprint = photo_params["footprint_w_m"] / 2.0
+    for plan in drone_plans:
+        waypoints = plan["waypoints"]
+        for idx, waypoint in enumerate(waypoints[:-1]):
+            if waypoint["stage"] == "SURVEY_LINE" and waypoints[idx + 1]["stage"] == "SURVEY_LINE_END":
+                end = waypoints[idx + 1]
+                line = LineString([
+                    to_utm(waypoint["lon"], waypoint["lat"]),
+                    to_utm(end["lon"], end["lat"]),
+                ])
+                footprints.append(line.buffer(half_footprint, cap_style=2))
+    covered_area = poly_survey.intersection(unary_union(footprints)).area if footprints else 0.0
+    coverage_pct = 100.0 * covered_area / poly_survey.area if poly_survey.area else 0.0
+
+    # Порог для отдельной проверки оператором; не является юридическим заключением.
     height_warning = None
     if flight_height_m > 150.0:
         height_warning = (
-            f"Высота полета H = {flight_height_m:.1f} м превышает норматив 150 м "
-            f"(Постановление Правительства РФ № 138). Требуется подача плана полета (FPL) в зональный центр ЕС ОрВД."
+            f"Высота полета H = {flight_height_m:.1f} м превышает порог 150 м. "
+            "Проверьте применимые ограничения воздушного пространства и необходимые разрешения до вылета."
         )
 
     # Интеллектуальный ТЭО-анализ (СППР для оператора)
@@ -1333,16 +1507,217 @@ def plan_multi_uav_mission(
         "wind_conditions": {
             "speed_ms": wind.speed_ms,
             "direction_deg": wind.direction_deg,
-            "optimal_sweep_angle_deg": round(optimal_angle, 1)
+            "optimal_sweep_angle_deg": round(optimal_angle, 1),
+            "sweep_phase": sweep_phase,
         },
         "metrics": {
             "total_survey_area_ha": round(poly_utm.area / 10000.0, 2),
             "total_swaths": num_swaths,
+            "coverage_pct": round(min(100.0, coverage_pct), 2),
             "makespan_min": round(makespan_s / 60.0, 1),
             "total_fleet_distance_km": round(total_fleet_distance_m / 1000.0, 2),
             "total_fleet_time_min": round(total_fleet_flight_time_s / 60.0, 1),
-            "active_drones_count": len(drone_plans),
+            "active_drones_count": len(elapsed_by_drone),
             "optimal_sweep_angle_deg": round(optimal_angle, 1)
         },
         "drone_plans": drone_plans
     }
+
+
+def _candidate_violation(
+    result: Dict[str, Any],
+    obstacles: Optional[List[Dict[str, Any]]],
+    airspace_zones: Optional[List[Dict[str, Any]]],
+    avoid_nfz: bool,
+    allowed_airspace_geojson: Optional[dict] = None,
+) -> Optional[str]:
+    """Reject a complete route that violates a hard flight constraint."""
+    if result["metrics"]["coverage_pct"] < 99.0:
+        return f"Съемка покрывает только {result['metrics']['coverage_pct']:.2f}% допустимой области"
+    for plan in result["drone_plans"]:
+        if not plan["is_energy_safe"]:
+            return f"Недостаточный запас батареи у {plan['drone_name']}"
+        coords = plan["geojson_linestring"]["coordinates"]
+        if allowed_airspace_geojson:
+            allowed = shape(allowed_airspace_geojson.get("geometry", allowed_airspace_geojson))
+            if not allowed.buffer(1e-7).covers(LineString([(c[0], c[1]) for c in coords])):
+                return "Маршрут выходит за пределы указанной разрешенной области"
+        to_utm, _ = get_utm_transformer(coords[0][0], coords[0][1])
+        route = LineString([to_utm(c[0], c[1]) for c in coords])
+        height = plan["flight_height_m"]
+
+        for obstacle in obstacles or []:
+            center = obstacle.get("centroid")
+            if center and height - obstacle.get("height_m", 50.0) < 25.0:
+                if route.distance(Point(to_utm(center[0], center[1]))) < 70.0:
+                    return f"Маршрут проходит ближе 70 м к препятствию {obstacle.get('name', '')}"
+
+        if avoid_nfz:
+            for zone in airspace_zones or []:
+                if not zone["geometry"].intersects(
+                    LineString([(c[0], c[1]) for c in coords])
+                ):
+                    continue
+                altitude = zone.get("altitude_info", {})
+                raw = altitude.get("raw_text", "").upper()
+                # Without terrain/pressure data, mixed AGL, AMSL and FL limits
+                # cannot be certified as vertically clear.
+                agl_only = altitude.get("reference") == "AGL" and "AMSL" not in raw and "FL" not in raw
+                vertically_clear = agl_only and not (
+                    altitude.get("min_alt_m", 0.0) <= height <= altitude.get("max_alt_m", math.inf)
+                )
+                if not vertically_clear:
+                    return f"Маршрут пересекает зону {zone.get('name', '')}; высота или время действия не подтверждены"
+    return None
+
+
+def plan_multi_uav_mission(
+    polygon_geojson: dict,
+    sensor: SensorSpec,
+    drones: List[DroneSpec],
+    wind: WindConfig,
+    criterion: str = "min_makespan",
+    target_gsd_cm: float = 3.0,
+    launch_points: Optional[List[LaunchPoint]] = None,
+    allowed_airspace_geojson: Optional[dict] = None,
+    obstacles: Optional[List[Dict[str, Any]]] = None,
+    airspace_zones: Optional[List[Dict[str, Any]]] = None,
+    sweep_angle_deg: Optional[float] = None,
+    max_allowed_time_min: Optional[float] = None,
+    max_available_drones: Optional[int] = None,
+    battery_swap_penalty_min: float = 15.0,
+    avoid_nfz: bool = True,
+    overlap_forward: Optional[float] = None,
+    overlap_side: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Compare complete, feasible missions for the requested objective.
+
+    This is a bounded search over sweep angles, fleet subsets and two-drone
+    splits. It reports the best evaluated route, not a global optimum proof.
+    """
+    if criterion not in ("min_makespan", "min_flight_time"):
+        return {"error": "Неизвестный критерий оптимизации"}
+    if not drones:
+        return {"error": "Не выбран ни один БВС"}
+
+    limit = min(len(drones), max_available_drones) if max_available_drones else len(drones)
+    subsets = [list(group) for size in range(1, limit + 1)
+               for group in combinations(drones, size)]
+    subsets.sort(key=lambda group: -len(group) if criterion == "min_makespan" else len(group))
+    angles = [sweep_angle_deg] if sweep_angle_deg is not None else [None, -1.0, wind.direction_deg % 180.0]
+    if launch_points:
+        emergency_pads = [point for point in launch_points if point.type == "emergency_pad"]
+        base_options = [[point, *emergency_pads] for point in launch_points if point.type == "base"]
+        if not base_options:
+            return {"error": "Нужна хотя бы одна точка старта типа base"}
+    else:
+        base_options = [None]
+    configurations = [(base_option, index, angle)
+                      for index, angle in enumerate(angles)
+                      for base_option in base_options]
+    best = None
+    best_key = None
+    evaluated = 0
+    rejected = 0
+    errors = []
+    scenario_best = {}
+    auto_angle_by_drone = {}
+    started = time.monotonic()
+    deadline_s = 12.0
+
+    for base_option, angle_index, angle in configurations:
+        for subset in subsets:
+            if evaluated and time.monotonic() - started >= deadline_s:
+                break
+            splits = [None]
+            for split in splits:
+                if evaluated and time.monotonic() - started >= deadline_s:
+                    break
+                angle_key = (base_option[0].id if base_option else None, subset[0].id)
+                candidate_angle = auto_angle_by_drone.get(angle_key, angle) if angle is None else angle
+                result = _plan_mission_candidate(
+                    polygon_geojson, sensor, subset, wind,
+                    criterion="min_makespan" if len(subset) > 1 else "min_flight_time",
+                    target_gsd_cm=target_gsd_cm, launch_points=base_option,
+                    obstacles=obstacles, airspace_zones=airspace_zones,
+                    sweep_angle_deg=candidate_angle, max_allowed_time_min=max_allowed_time_min,
+                    max_available_drones=max_available_drones,
+                    battery_swap_penalty_min=battery_swap_penalty_min,
+                    assignment_split=split,
+                    overlap_forward=overlap_forward,
+                    overlap_side=overlap_side,
+                )
+                evaluated += 1
+                if "error" in result:
+                    errors.append(result["error"])
+                    continue
+                if angle is None:
+                    auto_angle_by_drone[angle_key] = result["metrics"]["optimal_sweep_angle_deg"]
+                if split is None and len(subset) == 2 and angle_index == 0:
+                    count = result["metrics"]["total_swaths"]
+                    if 2 <= count <= 8:
+                        splits.extend(range(1, count))
+                    elif count <= 60:
+                        splits.extend(sorted({max(1, min(count - 1, round(count * q)))
+                                              for q in (0.2, 0.4, 0.6, 0.8)}))
+                violation = _candidate_violation(
+                    result, obstacles, airspace_zones, avoid_nfz, allowed_airspace_geojson
+                )
+                if max_allowed_time_min is not None and result["metrics"]["makespan_min"] > max_allowed_time_min:
+                    violation = f"Маршрут не укладывается в лимит {max_allowed_time_min:.1f} мин"
+                if violation:
+                    rejected += 1
+                    errors.append(violation)
+                    continue
+                plans = result["drone_plans"]
+                elapsed = {}
+                sorties = {}
+                for plan in plans:
+                    drone_id = plan["drone_id"]
+                    elapsed[drone_id] = elapsed.get(drone_id, 0.0) + plan["flight_time_s"]
+                    sorties[drone_id] = sorties.get(drone_id, 0) + 1
+                elapsed_with_swaps = [
+                    seconds + (sorties[drone_id] - 1) * battery_swap_penalty_min * 60.0
+                    for drone_id, seconds in elapsed.items()
+                ]
+                total_flight_s = sum(elapsed.values())
+                objective = max(elapsed_with_swaps) if criterion == "min_makespan" else total_flight_s
+                secondary = total_flight_s if criterion == "min_makespan" else max(elapsed_with_swaps)
+                key = (objective, secondary, len(elapsed))
+                scenario_kind = "single_drone" if len(elapsed) == 1 else "parallel_fleet"
+                scenario_makespan = max(elapsed_with_swaps)
+                if scenario_kind not in scenario_best or scenario_makespan < scenario_best[scenario_kind][0]:
+                    scenario_best[scenario_kind] = (scenario_makespan, result)
+                if best_key is None or key < best_key:
+                    best = result
+                    best_key = key
+        if evaluated and time.monotonic() - started >= deadline_s:
+            break
+        # A large area needs a bounded answer more than more sweep-angle trials.
+        if best and best["metrics"]["total_swaths"] > 60 and angle_index > 0:
+            break
+
+    if best is None:
+        return {"error": errors[0] if errors else "Не найден допустимый маршрут"}
+    best["optimization_criterion"] = criterion
+    if "single_drone" in scenario_best and "parallel_fleet" in scenario_best:
+        scenarios = {}
+        for kind, (duration_s, result) in scenario_best.items():
+            count = result["metrics"]["active_drones_count"]
+            sorties = len(result["drone_plans"])
+            scenarios[kind] = {
+                "name": "1 борт" if count == 1 else f"Параллельный флот ({count} БВС)",
+                "drones_count": count,
+                "makespan_min": round(duration_s / 60.0, 1),
+                "battery_swaps": sorties - count,
+                "to_wear_score": f"{sorties} вылетов",
+            }
+        best["feasibility"]["fleet_scenarios"] = scenarios
+    best["search"] = {
+        "method": "bounded_full_route_comparison",
+        "evaluated_candidates": evaluated,
+        "rejected_candidates": rejected,
+        "optimality_proven": False,
+        "objective_seconds": round(best_key[0], 1),
+    }
+    return best
