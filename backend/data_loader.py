@@ -6,7 +6,7 @@ from shapely.geometry import Polygon, MultiPolygon, Point, shape
 from shapely.strtree import STRtree
 import json
 
-DATA_DIR = r"C:\Users\kriti\Downloads\хакатон"
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 def parse_altitude_text(text: str) -> Dict[str, Any]:
     """
