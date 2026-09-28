@@ -1170,3 +1170,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
   border-color: #dcfce7;
   color: #15803d;
 }
+
+/* Принудительное скрытие всех флагов и атрибуций Leaflet */
+.leaflet-attribution-flag,
+.leaflet-control-attribution svg,
+.leaflet-control-attribution {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

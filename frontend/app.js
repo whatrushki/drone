@@ -143,7 +143,8 @@ function initMap() {
   map = L.map("map", {
     center: [54.85, 38.65],
     zoom: 12,
-    zoomControl: false
+    zoomControl: false,
+    attributionControl: false
   });
 
   L.control.zoom({ position: "topright" }).addTo(map);
