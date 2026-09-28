@@ -32,11 +32,12 @@
 
     <div class="nav-status-pills">
       <span class="status-pill" id="datasetStats">613 полигонов • 341 зона</span>
-      <span class="status-pill highlight">4D-Airspace Ready</span>
+      <span class="status-pill highlight">Ограничения проверяются</span>
       <span class="status-pill">WGS-84 / UTM</span>
     </div>
 
     <div class="nav-actions">
+      <button class="btn btn-ghost" id="btnOpenPanel" hidden>Параметры</button>
       <button class="btn btn-ghost" id="btnFitAll">⛶ Все зоны</button>
       <button class="btn btn-primary" id="btnCalculate">Сформировать задание</button>
     </div>
@@ -44,6 +45,7 @@
 
   <!-- КАРТОГРАФИЧЕСКАЯ ПОДЛОЖКА (НА ВЕСЬ ЭКРАН) -->
   <div id="map"></div>
+  <div id="missionMessage" class="mission-message" role="alert" tabindex="-1" hidden></div>
 
   <!-- ЛЕВАЯ ПЛАВАЮЩАЯ КАРТОЧКА УПРАВЛЕНИЯ -->
   <aside class="floating-panel" id="controlPanel">
@@ -66,6 +68,7 @@
     <div class="tab-content active" id="tab-territory">
       <div class="control-section">
         <label class="section-label">Участок из «Границы полетов.kml»</label>
+        <input id="parcelSearch" class="styled-input parcel-search" type="search" placeholder="Поиск по FID или площади" aria-label="Поиск участка">
         <div class="select-group">
           <select id="parcelSelect" class="styled-select">
             <option value="">Загрузка полигонов...</option>
@@ -73,6 +76,7 @@
           <button class="btn-icon" id="btnRefreshParcels" title="Обновить список">↻</button>
         </div>
         <div class="helper-text" id="parcelInfoHint">Площадь участка: —</div>
+        <div class="helper-text" id="parcelCountHint"></div>
       </div>
 
       <div class="divider-line">
@@ -92,17 +96,37 @@
             <input type="checkbox" id="toggleZones" checked>
             <div class="checkbox-text">
               <strong>Зоны ограничений ВП («Московская зона.kml»)</strong>
-              <span>Включая 4D эшелоны FL, AGL/AMSL и временные окна</span>
+              <span>Время действия и неоднозначные высоты требуют проверки оператором</span>
             </div>
           </label>
           <label class="checkbox-row">
             <input type="checkbox" id="toggleObstacles" checked>
             <div class="checkbox-text">
               <strong>3D-препятствия («obstacles_Московская обл.kml»)</strong>
-              <span>5 162 вышки и мачты связи с буфером безопасности 70 м</span>
+              <span id="obstacleDatasetHint">Вышки и мачты связи с буфером безопасности 70 м</span>
             </div>
           </label>
         </div>
+        <p class="helper-text">Флажки управляют только видимостью слоёв. Проверка ограничений при расчёте остаётся включённой.</p>
+      </div>
+
+      <div class="control-section mt-16">
+        <label class="section-label">Точки старта и резервные площадки</label>
+        <p class="helper-text">Добавьте точки кликом по карте. Если баз нет, планировщик предложит расчётную точку старта, которую нужно проверить на местности.</p>
+        <div class="map-edit-actions">
+          <button type="button" class="btn btn-ghost" id="btnAddBase">+ База</button>
+          <button type="button" class="btn btn-ghost" id="btnAddEmergency">+ Резервная</button>
+        </div>
+        <div id="launchPointList" class="launch-point-list"></div>
+      </div>
+
+      <div class="control-section mt-16">
+        <label class="section-label">Граница разрешённой области</label>
+        <div class="map-edit-actions">
+          <button type="button" class="btn btn-ghost" id="btnDrawAllowed">Нарисовать область</button>
+          <button type="button" class="btn btn-ghost" id="btnClearAllowed">Очистить</button>
+        </div>
+        <p class="helper-text" id="allowedAreaHint">Не задана. Ограничения из набора данных проверяются отдельно.</p>
       </div>
 
       <div class="tab-footer">
@@ -243,10 +267,10 @@
       <div class="control-section mt-16">
         <div class="slider-header" style="margin-bottom:6px;">
           <label class="section-label">Ориентация галсов съемки</label>
-          <span class="badge badge-success" id="angleModeBadge" style="font-size:10px;">Авто (Оптимум)</span>
+          <span class="badge badge-success" id="angleModeBadge" style="font-size:10px;">Авто (поиск)</span>
         </div>
         <div style="display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 4px; margin-bottom: 8px;">
-          <button type="button" class="btn btn-ghost angle-preset-btn active" id="btnAngleAuto" style="font-size:11px; padding:6px 2px; font-weight:600;">✨ Авто (Оптимум)</button>
+          <button type="button" class="btn btn-ghost angle-preset-btn active" id="btnAngleAuto" style="font-size:11px; padding:6px 2px; font-weight:600;">Авто (поиск)</button>
           <button type="button" class="btn btn-ghost angle-preset-btn" id="btnAngleAxis" style="font-size:11px; padding:6px 2px;">Вдоль поля</button>
           <button type="button" class="btn btn-ghost angle-preset-btn" id="btnAngleWind" style="font-size:11px; padding:6px 2px;">По ветру</button>
           <button type="button" class="btn btn-ghost angle-preset-btn" id="btnAngleManual" style="font-size:11px; padding:6px 2px;">Ручной</button>
@@ -294,6 +318,14 @@
             <input type="number" id="maxDronesLimitInput" placeholder="Все" min="1" max="5" step="1" class="styled-input">
           </div>
         </div>
+        <details class="advanced-settings">
+          <summary>Дополнительные параметры съёмки</summary>
+          <div class="constraints-grid">
+            <label class="constraint-field">Продольное перекрытие, %<input type="number" id="overlapForwardInput" class="styled-input" placeholder="По сенсору" min="0" max="99" step="1"></label>
+            <label class="constraint-field">Поперечное перекрытие, %<input type="number" id="overlapSideInput" class="styled-input" placeholder="По сенсору" min="0" max="99" step="1"></label>
+            <label class="constraint-field">Наземный интервал, мин<input type="number" id="batterySwapInput" class="styled-input" value="15" min="0" max="240" step="1"></label>
+          </div>
+        </details>
       </div>
 
       <div class="tab-footer">
@@ -323,7 +355,7 @@
     <div id="legendItems"></div>
   </div>
 
-  <!-- НИЖНЯЯ ПЛАВАЮЩАЯ КАРТОЧКА РЕЗУЛЬТАТОВ И 4D ПЛЕЕРА -->
+  <!-- НИЖНЯЯ КАРТОЧКА РЕЗУЛЬТАТОВ И ВРЕМЕННОГО ПЛЕЕРА -->
   <div class="floating-results-card" id="statsRibbon" style="display: none;">
     <!-- ПРЕДУПРЕЖДЕНИЕ О НОРМАТИВАХ / АВТОЗАМЕНЕ БВС -->
     <div id="resultsAlertBanner" class="result-warning-banner" style="display: none;"></div>
@@ -339,7 +371,11 @@
         <strong class="metric-number" id="statMakespan">—</strong>
       </div>
       <div class="metric-item">
-        <span class="metric-caption">НАЛЕТ ФЛОТА</span>
+        <span class="metric-caption">НАЛЁТ ФЛОТА</span>
+        <strong class="metric-number" id="statFlightTime">—</strong>
+      </div>
+      <div class="metric-item">
+        <span class="metric-caption">ДИСТАНЦИЯ</span>
         <strong class="metric-number" id="statDistance">—</strong>
       </div>
       <div class="metric-item">
@@ -357,6 +393,12 @@
         <button class="btn btn-ghost" id="btnExportGeoJson">GeoJSON</button>
         <button class="btn btn-ghost btn-plan" id="btnExportPlan">.plan (QGC/Geoscan)</button>
       </div>
+    </div>
+
+    <div class="comparison-section" id="comparisonSection" hidden>
+      <div class="comparison-title">Сравнение критериев на одних входных данных <span id="comparisonNote"></span></div>
+      <div class="comparison-grid" id="comparisonGrid"></div>
+      <label class="comparison-overlay-control"><input type="checkbox" id="showAlternativeRoute"> Показать альтернативный маршрут пунктиром</label>
     </div>
 
     <!-- БЛОК ТЭО И АНАЛИТИКИ ЭКСПЕРТА (ОТВЕТ НА ТРЕБОВАНИЯ ГЕОСКАНА) -->
@@ -378,7 +420,7 @@
       <div id="obstacleAlertBox" style="margin-top: 8px; display: none;"></div>
     </div>
 
-    <!-- НИЖНИЙ РЯД: 4D TIME-LAPSE ПЛЕЕР -->
+    <!-- НИЖНИЙ РЯД: ПЛЕЕР ПО РАСЧЁТНОМУ ВРЕМЕНИ СЕГМЕНТОВ -->
     <div class="results-player-row">
       <div class="player-controls">
         <button class="player-btn" id="btnPlayPause">▶</button>
