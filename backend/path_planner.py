@@ -1786,15 +1786,29 @@ def _candidate_violation(
                 ):
                     continue
                 altitude = zone.get("altitude_info", {})
-                raw = altitude.get("raw_text", "").upper()
-                # Without terrain/pressure data, mixed AGL, AMSL and FL limits
-                # cannot be certified as vertically clear.
-                agl_only = altitude.get("reference") == "AGL" and "AMSL" not in raw and "FL" not in raw
-                vertically_clear = agl_only and not (
-                    altitude.get("min_alt_m", 0.0) <= height <= altitude.get("max_alt_m", math.inf)
-                )
+                min_alt = float(altitude.get("min_alt_m", 0.0))
+                max_alt = float(altitude.get("max_alt_m", math.inf))
+                ref = str(altitude.get("reference", "AMSL")).upper()
+                raw = str(altitude.get("raw_text", "")).lower()
+
+                # Учет высоты рельефа в Московской области (до 300м AMSL) и буфера безопасности 30м
+                SAFETY_BUFFER_M = 30.0
+                TERRAIN_MAX_AMSL = 300.0
+
+                is_agl = ref == "AGL" or "от земли" in raw or "gnd" in raw
+                if is_agl:
+                    # Зона от уровня земли (AGL): безопасен пролет строго ниже зоны или строго выше
+                    vertically_clear = (height + SAFETY_BUFFER_M < min_alt) or (height - SAFETY_BUFFER_M > max_alt)
+                else:
+                    # Зона от уровня моря (AMSL / эшелоны FL)
+                    # Высота дрона над уровнем моря с учетом максимальной высоты рельефа
+                    drone_amsl_max = height + TERRAIN_MAX_AMSL + SAFETY_BUFFER_M
+                    drone_amsl_min = max(0.0, height)
+                    # Если нижняя граница зоны (например, FL150 = 4572м) существенно выше высоты дрона с рельефом
+                    vertically_clear = (drone_amsl_max < min_alt) or (drone_amsl_min > max_alt + SAFETY_BUFFER_M)
+
                 if not vertically_clear:
-                    return f"Маршрут пересекает зону {zone.get('name', '')}; высота или время действия не подтверждены"
+                    return f"Маршрут пересекает зону {zone.get('name', '')} (H={min_alt:.0f}..{max_alt:.0f}м); эшелон полета {height:.0f}м не обеспечивает безопасный интервал"
     return None
 
 

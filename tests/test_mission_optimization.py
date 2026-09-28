@@ -316,6 +316,26 @@ class MissionOptimizationTests(unittest.TestCase):
                 self.assertLessEqual(angle, 1.0, f"Аварийный сход должен быть прямым коридором, но угол в WP {i} = {angle:.1f}°")
 
 
+    def test_high_altitude_zone_not_blocking_low_drone(self):
+        """Проверяем, что зоны на высоте от 4.5 км до 30 км (UUR215) не блокируют полет БВС на 100м."""
+        # Полигон на юге МО (где действует UUR215)
+        polygon = {
+            "type": "Polygon",
+            "coordinates": [[[38.50, 54.75], [38.52, 54.75], [38.52, 54.76], [38.50, 54.76], [38.50, 54.75]]]
+        }
+        res = self.client.post("/api/plan-mission", json={
+            "polygon_geojson": polygon,
+            "available_drones": ["geoscan_gemini"],
+            "target_gsd_cm": 3.0,
+            "avoid_nfz": True
+        })
+        self.assertEqual(res.status_code, 200, f"Планирование не должно падать из-за высотных зон: {res.text}")
+        data = res.json()
+        self.assertIn("drone_plans", data)
+        self.assertGreater(len(data["drone_plans"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
