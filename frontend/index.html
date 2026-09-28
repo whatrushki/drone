@@ -411,10 +411,11 @@
 
       <!-- КНОПКИ ЭКСПОРТА (ПИЛЮЛИ) -->
       <div class="export-actions">
-        <button class="btn btn-ghost" id="btnExportKml">Экспорт KML</button>
-        <button class="btn btn-ghost" id="btnExportGeoJson">GeoJSON</button>
-        <button class="btn btn-ghost btn-plan" id="btnExportPlan">.plan (QGC/Geoscan)</button>
-        <button class="btn btn-ghost btn-plan" id="btnExportEmergPlan" style="display:none; color: #dc2626; border-color: rgba(220, 38, 38, 0.3);">🚨 План схода (.plan)</button>
+        <button class="btn btn-ghost" id="btnExportKml" title="Скачать KML для Google Earth и ГИС">📥 KML</button>
+        <button class="btn btn-ghost" id="btnExportGeoJson" title="Скачать GeoJSON с траекториями и стадиями">📥 GeoJSON</button>
+        <button class="btn btn-ghost btn-plan" id="btnExportPlan" title="Экспорт задания в QGroundControl и Geoscan Planner">📥 .plan (QGC)</button>
+        <button class="btn btn-ghost btn-plan" id="btnExportEmergPlan" style="display:none; color: #dc2626; border-color: rgba(220, 38, 38, 0.3);">🚨 Сход (.plan)</button>
+        <button class="btn btn-ghost" id="btnPrintBriefing" title="Печать официального полетного листа / Акта планирования">🖨️ Полетный лист</button>
       </div>
     </div>
 

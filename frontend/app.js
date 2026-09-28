@@ -494,6 +494,10 @@ function initEventListeners() {
   if (btnEmergPlan) {
     btnEmergPlan.addEventListener("click", exportEmergencyPlan);
   }
+  const btnPrint = document.getElementById("btnPrintBriefing");
+  if (btnPrint) {
+    btnPrint.addEventListener("click", printMissionBriefing);
+  }
 
 
   // Регуляторы заряда батарей БВС
@@ -1561,4 +1565,130 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+function printMissionBriefing() {
+  if (!currentMissionPlan) {
+    showMissionMessage("Сначала рассчитайте полетное задание.");
+    return;
+  }
+  const plan = currentMissionPlan;
+  const m = plan.metrics;
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    window.print();
+    return;
+  }
+  const dateStr = new Date().toLocaleString("ru-RU");
+  const dronesRows = plan.drone_plans.map((dp, i) => `
+    <tr>
+      <td><b>${i + 1}</b></td>
+      <td><b>${escapeHtml(dp.drone_name)}</b> (${dp.drone_type})</td>
+      <td>${escapeHtml(dp.sensor_name || 'Sony RX1R II')}</td>
+      <td>${dp.flight_height_m} м</td>
+      <td>${dp.flight_speed_ms || dp.cruise_speed || 15} м/с</td>
+      <td>${dp.distance_km} км</td>
+      <td>${dp.flight_time_min} мин</td>
+      <td>${dp.battery_used_pct}% (ост. ${dp.battery_remaining_pct}%)</td>
+      <td>${dp.emergency_diversion ? escapeHtml(dp.emergency_diversion.pad_name) : 'Базовый пункт'}</td>
+    </tr>
+  `).join("");
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+      <meta charset="utf-8">
+      <title>Полетный лист — Задание АФС Геоскан</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 40px; color: #181825; line-height: 1.5; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #181825; padding-bottom: 15px; margin-bottom: 25px; }
+        .logo { font-size: 22px; font-weight: 800; letter-spacing: 1px; color: #181825; }
+        .sublogo { font-size: 13px; color: #64748b; font-weight: 500; }
+        .doc-title { font-size: 20px; font-weight: 700; margin-bottom: 6px; text-transform: uppercase; }
+        .meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 25px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .meta-item strong { display: block; font-size: 11px; text-transform: uppercase; color: #64748b; }
+        .meta-item span { font-size: 15px; font-weight: 600; color: #0f172a; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
+        th, td { border: 1px solid #cbd5e1; padding: 8px 12px; font-size: 12px; text-align: left; }
+        th { background: #f1f5f9; font-weight: 600; text-transform: uppercase; font-size: 11px; }
+        .section-title { font-size: 14px; font-weight: 700; margin: 20px 0 10px; text-transform: uppercase; color: #334155; }
+        .feasibility-box { background: #ecfdf5; border-left: 4px solid #10b981; padding: 12px 16px; border-radius: 4px; margin-bottom: 25px; font-size: 13px; }
+        .sign-row { display: flex; justify-content: space-between; margin-top: 50px; padding-top: 20px; border-top: 1px solid #cbd5e1; }
+        .sign-col { width: 45%; }
+        .sign-line { border-bottom: 1px solid #334155; margin-top: 35px; }
+        @media print { body { margin: 20px; } .no-print { display: none; } }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <div>
+          <div class="logo">GEOSCAN FLEETCOMMANDER AI</div>
+          <div class="sublogo">Интеллектуальная система планирования групповых авиационных работ</div>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-weight: 600; font-size: 13px;">УТВЕРЖДЕНО К ПОЛЕТУ</div>
+          <div style="font-size: 12px; color: #64748b;">Дата: ${dateStr}</div>
+        </div>
+      </div>
+
+      <div class="doc-title">Полетный лист (Акт планирования миссии)</div>
+      <div style="color: #64748b; font-size: 13px; margin-bottom: 20px;">Критерий оптимизации: <b>${plan.metrics.active_criterion === 'min_makespan' ? 'Минимизация времени (параллельный флот)' : 'Минимизация суммарного налета'}</b></div>
+
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Площадь съемки</strong><span>${m.total_survey_area_ha} га</span></div>
+        <div class="meta-item"><strong>Время выполнения (Makespan)</strong><span>${m.makespan_min} мин</span></div>
+        <div class="meta-item"><strong>Суммарный налет флота</strong><span>${m.total_fleet_time_min} мин</span></div>
+        <div class="meta-item"><strong>Суммарная дистанция</strong><span>${m.total_fleet_distance_km} км</span></div>
+        <div class="meta-item"><strong>Количество галсов</strong><span>${m.total_swaths}</span></div>
+        <div class="meta-item"><strong>Покрытие территории</strong><span>${m.coverage_pct}%</span></div>
+      </div>
+
+      <div class="section-title">Распределение задач по бортам БВС</div>
+      <table>
+        <thead>
+          <tr>
+            <th>№</th>
+            <th>БВС</th>
+            <th>Полезная нагрузка</th>
+            <th>Высота (H)</th>
+            <th>Скорость</th>
+            <th>Дистанция</th>
+            <th>Время</th>
+            <th>Расход АКБ</th>
+            <th>Резервная ВПП</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${dronesRows}
+        </tbody>
+      </table>
+
+      <div class="section-title">Заключение о выполнимости и безопасности (ТЭО)</div>
+      <div class="feasibility-box">
+        <b>Статус:</b> ${plan.feasibility?.is_feasible ? '✓ Миссия полностью выполнима и безопасна' : '⚠️ Требует внимания оператора'}<br>
+        ${escapeHtml(plan.feasibility?.advisor_summary || 'Все параметры соответствуют регламентам БВС Геоскан и ограничениям воздушного пространства.')}
+      </div>
+
+      <div class="sign-row">
+        <div class="sign-col">
+          <div style="font-weight:600; font-size:12px;">Руководитель полетов / Оператор БВС:</div>
+          <div class="sign-line"></div>
+          <div style="font-size:11px; color:#64748b; margin-top:4px;">(подпись, расшифровка)</div>
+        </div>
+        <div class="sign-col">
+          <div style="font-weight:600; font-size:12px;">Инженер полезной нагрузки / Геодезист:</div>
+          <div class="sign-line"></div>
+          <div style="font-size:11px; color:#64748b; margin-top:4px;">(подпись, расшифровка)</div>
+        </div>
+      </div>
+
+      <div style="margin-top: 30px; text-align: center;" class="no-print">
+        <button onclick="window.print()" style="padding: 10px 24px; font-size: 14px; font-weight: 600; background: #181825; color: #fff; border: none; border-radius: 6px; cursor: pointer;">Распечатать / Сохранить в PDF</button>
+      </div>
+    </body>
+    </html>
+  `;
+  printWindow.document.write(html);
+  printWindow.document.close();
 }
