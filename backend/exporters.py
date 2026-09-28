@@ -147,7 +147,7 @@ def export_plan_to_qgc_mission(drone_plan: Dict[str, Any]) -> Dict[str, Any]:
             "command": command,
             "doJumpId": idx + 1,
             "frame": 3, # MAV_FRAME_GLOBAL_RELATIVE_ALT
-            "params": [0, 0, 0, None, wp["lat"], wp["lon"], wp["alt_m"]],
+            "params": [0.0, 0.0, 0.0, 0.0, wp["lat"], wp["lon"], wp["alt_m"]],
             "type": "SimpleItem"
         })
         
@@ -170,3 +170,45 @@ def export_plan_to_qgc_mission(drone_plan: Dict[str, Any]) -> Dict[str, Any]:
         "rallyPoints": {"points": [], "version": 2},
         "version": 1
     }
+
+def export_emergency_to_qgc_mission(drone_plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Экспорт аварийного плана схода на резервную ВПП в формат QGroundControl (.plan)"""
+    emerg = drone_plan.get("emergency_diversion") or {}
+    waypoints = emerg.get("waypoints") or []
+    if not waypoints:
+        return export_plan_to_qgc_mission(drone_plan)
+        
+    items = []
+    for idx, wp in enumerate(waypoints):
+        command = 16 # MAV_CMD_NAV_WAYPOINT
+        if wp.get("stage") == "LANDING":
+            command = 21 # MAV_CMD_NAV_LAND
+        items.append({
+            "autoContinue": True,
+            "command": command,
+            "doJumpId": idx + 1,
+            "frame": 3,
+            "params": [0.0, 0.0, 0.0, 0.0, wp["lat"], wp["lon"], wp["alt_m"]],
+            "type": "SimpleItem"
+        })
+        
+    return {
+        "fileType": "Plan",
+        "geoFence": {"circles": [], "polygons": [], "version": 2},
+        "groundStation": "QGroundControl / Geoscan Emergency Contingency",
+        "mission": {
+            "cruiseSpeed": drone_plan.get("cruise_speed_ms", 15.0),
+            "hoverSpeed": drone_plan.get("cruise_speed_ms", 15.0),
+            "items": items,
+            "plannedHomePosition": [
+                emerg.get("lat", waypoints[0]["lat"]),
+                emerg.get("lon", waypoints[0]["lon"]),
+                0
+            ],
+            "vehicleType": 1 if drone_plan.get("drone_type") == "fixed_wing" else 2,
+            "version": 2
+        },
+        "rallyPoints": {"points": [], "version": 2},
+        "version": 1
+    }
+

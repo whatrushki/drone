@@ -203,6 +203,7 @@ class MissionRequest(BaseModel):
     avoid_nfz: bool = True
     avoid_obstacles: bool = True
     flight_time_utc: Optional[str] = "2026-05-15T10:00:00Z"
+    drone_battery_levels: Optional[Dict[str, float]] = None # Индивидуальный заряд доступных БВС (в %): например {"geoscan_201": 85.0}
     # Операционные ограничения и ТЭО (ответ на требования экспертов Геоскана)
     max_allowed_time_min: Optional[float] = Field(default=None, gt=0.0) # Лимит времени на миссию (мин)
     max_available_drones: Optional[int] = Field(default=None, ge=1) # Максимально допустимое кол-во активных бортов

@@ -16,12 +16,20 @@ from .models import (
 from .data_loader import data_loader
 from .photogrammetry import calculate_photogrammetry
 from .path_planner import plan_multi_uav_mission
-from .exporters import export_plan_to_geojson, export_plan_to_kml, export_plan_to_qgc_mission
+from .exporters import export_plan_to_geojson, export_plan_to_kml, export_plan_to_qgc_mission, export_emergency_to_qgc_mission
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    data_loader.load_all()
+    yield
 
 app = FastAPI(
     title="Geoscan FleetCommander AI",
     description="Интеллектуальный сервис планирования и распределения беспилотных авиационных работ для группы БВС Геоскан",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS для локальной разработки и веб-клиента
@@ -32,11 +40,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-def startup_event():
-    # Загружаем датасет хакатона при старте сервера
-    data_loader.load_all()
 
 @app.get("/api/health")
 def health_check():
@@ -190,7 +193,15 @@ def plan_mission(req: MissionRequest):
     unknown_drones = set(req.available_drones) - set(GEOSCAN_DRONE_CATALOG)
     if unknown_drones or not req.available_drones:
         raise HTTPException(status_code=400, detail=f"Некорректный список БВС: {sorted(unknown_drones)}")
-    drones = [GEOSCAN_DRONE_CATALOG[d_id] for d_id in dict.fromkeys(req.available_drones)]
+    battery_levels = req.drone_battery_levels or {}
+    drones = []
+    for d_id in dict.fromkeys(req.available_drones):
+        base_spec = GEOSCAN_DRONE_CATALOG[d_id]
+        if d_id in battery_levels:
+            lvl = max(10.0, min(100.0, float(battery_levels[d_id])))
+            drones.append(base_spec.model_copy(update={"battery_level": lvl}))
+        else:
+            drones.append(base_spec.model_copy())
         
     sensors_to_plan = []
     if req.sensor_ids and len(req.sensor_ids) > 0:
@@ -377,6 +388,14 @@ def export_qgc(drone_plan: Union[Dict[str, Any], List[Dict[str, Any]]]):
         return _export_archive(drone_plan, "plan", export_plan_to_qgc_mission)
     qgc = export_plan_to_qgc_mission(drone_plan)
     return Response(content=json.dumps(qgc, ensure_ascii=False, indent=2), media_type="application/json")
+
+@app.post("/api/export/emergency-qgc")
+def export_emergency_qgc(drone_plan: Union[Dict[str, Any], List[Dict[str, Any]]]):
+    if isinstance(drone_plan, list):
+        return _export_archive(drone_plan, "plan", export_emergency_to_qgc_mission)
+    qgc = export_emergency_to_qgc_mission(drone_plan)
+    return Response(content=json.dumps(qgc, ensure_ascii=False, indent=2), media_type="application/json")
+
 
 # Монтирование статических файлов веб-приложения (frontend)
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend")

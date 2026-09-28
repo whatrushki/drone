@@ -95,15 +95,90 @@ def generate_dubins_turn(
     # P1: точка створа перед входом на следующий галс
     P1 = np.array(p_enter, dtype=float) - d_in * max(20.0, lead_out_m)
     
-    dot_dir = np.dot(d_out, d_in)
-    dp = P1 - P0
+    dot_dir = float(np.dot(d_out, d_in))
     n_out = np.array([d_out[1], -d_out[0]])
-    lat_dist = abs(np.dot(dp, n_out))
     
     pts = []
     append_unique_pt(pts, P0)
     
-    # Универсальный строгий аналитический расчет путей Дубинса (CSC: LSL, RSR, LSR, RSL)
+    # 1. Если следующий галс параллелен и идет навстречу (dot < -0.85)
+    if dot_dir < -0.85:
+        dP = P1 - P0
+        along = float(np.dot(dP, d_out))
+        lat_proj = float(np.dot(dP, n_out))
+        n_side = n_out if lat_proj >= 0.0 else -n_out
+        D = abs(lat_proj)
+        
+        # Выравниваем уровень виража по наиболее удаленной точке вперед по d_out,
+        # чтобы разворот происходил строго снаружи полигона перед створом входа
+        if along > 0.0:
+            P0_turn = P0 + d_out * along
+            append_unique_pt(pts, (float(P0_turn[0]), float(P0_turn[1])))
+        else:
+            P0_turn = P0
+            
+        delta_y = math.sqrt(max(0.0, 4.0 * R**2 - D**2)) if D < 2.0 * R else 0.0
+        
+        if D < 2.0 * R:
+            # Классический авиационный вираж "Рыбий хвост" (Bulb Turn / Teardrop):
+            # Дуга 1 наружу радиуса R на C1 + сопряженная дуга 2 радиуса R на C2
+            C1 = P0_turn - n_side * R
+            C2 = P0_turn + n_side * (D - R) + d_out * delta_y
+            M = (C1 + C2) / 2.0
+            
+            # Дуга 1: по C1 против часовой стрелки (в базисе n_side, d_out)
+            vec_M1 = M - C1
+            proj_n1 = float(np.dot(vec_M1, n_side))
+            proj_d1 = float(np.dot(vec_M1, d_out))
+            a1 = math.atan2(proj_d1, proj_n1)
+            num_pts1 = max(4, int(math.ceil(R * a1 / 18.0)))
+            for a in np.linspace(0.0, a1, num_pts1)[1:]:
+                pt = C1 + n_side * (R * math.cos(a)) + d_out * (R * math.sin(a))
+                append_unique_pt(pts, (float(pt[0]), float(pt[1])))
+                
+            # Дуга 2: по C2 по часовой стрелке (в базисе n_side, d_out)
+            vec_M2 = M - C2
+            proj_n2 = float(np.dot(vec_M2, n_side))
+            proj_d2 = float(np.dot(vec_M2, d_out))
+            a_start2 = math.atan2(proj_d2, proj_n2)
+            sweep_angle2 = (2.0 * math.pi + a_start2) if a_start2 < 0.0 else a_start2
+            num_pts2 = max(6, int(math.ceil(R * sweep_angle2 / 18.0)))
+            for a in np.linspace(a_start2, a_start2 - sweep_angle2, num_pts2)[1:]:
+                pt = C2 + n_side * (R * math.cos(a)) + d_out * (R * math.sin(a))
+                append_unique_pt(pts, (float(pt[0]), float(pt[1])))
+                
+            # Точка выхода на створ следующего галса
+            p_entry_aligned = P0_turn + n_side * D + d_out * delta_y
+            append_unique_pt(pts, (float(p_entry_aligned[0]), float(p_entry_aligned[1])))
+            append_unique_pt(pts, P1)
+            append_unique_pt(pts, p_enter)
+            return pts
+        else:
+            # Широкий U-Turn (D >= 2R): поворот на 90°, прямая вставка (D - 2R), поворот на 90°
+            C1 = P0_turn + n_side * R
+            num_pts1 = max(4, int(math.ceil(R * (math.pi / 2.0) / 18.0)))
+            # Дуга 1: от P0_turn до p_mid_start (поворот на 90 градусов)
+            for a in np.linspace(0.0, math.pi / 2.0, num_pts1)[1:]:
+                pt = C1 - n_side * (R * math.cos(a)) + d_out * (R * math.sin(a))
+                append_unique_pt(pts, (float(pt[0]), float(pt[1])))
+                
+            # Прямой отрезок перехода к следующему створу
+            p_mid_start = C1 + d_out * R
+            p_mid_end = p_mid_start + n_side * (D - 2.0 * R)
+            if (D - 2.0 * R) > 1.0:
+                append_unique_pt(pts, (float(p_mid_end[0]), float(p_mid_end[1])))
+            
+            # Дуга 2: поворот еще на 90 градусов от p_mid_end до створа входа (P0_turn + n_side * D)
+            C2 = P0_turn + n_side * (D - R)
+            for psi in np.linspace(0.0, math.pi / 2.0, num_pts1)[1:]:
+                pt = C2 + d_out * (R * math.cos(psi)) + n_side * (R * math.sin(psi))
+                append_unique_pt(pts, (float(pt[0]), float(pt[1])))
+                
+            append_unique_pt(pts, P1)
+            append_unique_pt(pts, p_enter)
+            return pts
+
+    # 2. Универсальный строгий аналитический расчет путей Дубинса (CSC) для произвольных углов
     th0 = math.radians((90.0 - heading_out) % 360.0)
     th1 = math.radians((90.0 - heading_in) % 360.0)
     n0 = np.array([-math.sin(th0), math.cos(th0)])
@@ -163,6 +238,7 @@ def generate_dubins_turn(
         append_unique_pt(pts, P1)
         
     append_unique_pt(pts, P1)
+    append_unique_pt(pts, p_enter)
     return pts
 
 def generate_multirotor_turn(
@@ -1005,13 +1081,12 @@ def _plan_mission_candidate(
         drone_turn_radius_m=primary_drone.turn_radius
     )
     
-    # Нарезка всех галсов съемки с учетом вырезок препятствий
-    phase_candidates = []
-    for phase in (0.1, 0.3, 0.5, 0.7, 0.9):
-        swaths = plan_coverage_swaths(poly_survey, line_spacing_m, optimal_angle, phase)
-        coverage = coverage_ratio_for_swaths(poly_survey, swaths, photo_params["footprint_w_m"])
-        phase_candidates.append((coverage >= 0.99, coverage, -len(swaths), phase, swaths))
-    _, _, _, sweep_phase, all_swaths = max(phase_candidates, key=lambda item: item[:3])
+    # Нарезка галсов съемки с оптимальным центрированием
+    all_swaths = plan_coverage_swaths(poly_survey, line_spacing_m, optimal_angle, phase=0.5)
+    sweep_phase = 0.5
+    if not all_swaths:
+        all_swaths = plan_coverage_swaths(poly_survey, line_spacing_m, optimal_angle, phase=0.2)
+        sweep_phase = 0.2
     if not all_swaths:
         return {"error": "Полигон слишком мал для выбранного шага галсов"}
         
@@ -1038,7 +1113,14 @@ def _plan_mission_candidate(
             fleet_rejections[d.id] = reasons
             
     if not compatible_drones:
-        return {"error": f"Среди выбранных БВС нет совместимых с сенсором {sensor.name} и высотой {flight_height_m:.1f} м"}
+        rejection_details = []
+        for did, rs in fleet_rejections.items():
+            d_spec = GEOSCAN_DRONE_CATALOG.get(did)
+            d_name = d_spec.name if d_spec else did
+            rejection_details.append(f"{d_name}: {', '.join(rs)}")
+        return {
+            "error": f"Среди выбранных БВС нет совместимых (сенсор: {sensor.name}, высота: {flight_height_m:.1f} м). Причины: " + "; ".join(rejection_details)
+        }
 
     # Учет ограничения пользователя по максимальному числу активных бортов
     if max_available_drones is not None and max_available_drones > 0:
@@ -1064,6 +1146,36 @@ def _plan_mission_candidate(
         eff_speed = max(3.0, drone_spec.cruise_speed - w_cfg.speed_ms * 0.25)
         return (d_in + total_swath_len + turns_len + d_out) / eff_speed
 
+    def quick_estimate_drone_total_makespan(
+        swaths_subset: List[List[Tuple[float, float]]],
+        drone_spec: DroneSpec,
+        b_utm: Tuple[float, float],
+        w_cfg: WindConfig,
+        swap_penalty_s: float = 900.0
+    ) -> float:
+        if not swaths_subset:
+            return 0.0
+        safe_seconds = 60.0 * drone_spec.max_flight_time_min * max(
+            0.0, drone_spec.battery_level - drone_spec.reserve_battery_pct
+        ) / 100.0
+        budget = max(60.0, safe_seconds * 0.75)
+        
+        sorties = 1
+        batch = []
+        total_time_s = 0.0
+        for s in swaths_subset:
+            proposed = batch + [s]
+            t = quick_estimate_drone_mission_time(proposed, drone_spec, b_utm, w_cfg)
+            if batch and t > budget:
+                sorties += 1
+                total_time_s += quick_estimate_drone_mission_time(batch, drone_spec, b_utm, w_cfg)
+                batch = [s]
+            else:
+                batch = proposed
+        if batch:
+            total_time_s += quick_estimate_drone_mission_time(batch, drone_spec, b_utm, w_cfg)
+        return total_time_s + (sorties - 1) * swap_penalty_s
+
     if criterion == "min_flight_time" and len(compatible_drones) > 1:
         # Минимизация суммарного налета: отдаем приоритет самому энергоэффективному аппарату (крыло 201)
         fixed_wing = next((d for d in compatible_drones if d.type == "fixed_wing"), None)
@@ -1072,14 +1184,14 @@ def _plan_mission_candidate(
     elif len(compatible_drones) == 1:
         drone_assignments = [(compatible_drones[0], all_swaths)]
     else:
-        # Минимизация Makespan: балансировка времени выполнения миссии с учетом реальной скорости бортов
-        # 1. Сортируем галсы по удалению от базы
-        swaths_with_dist = []
-        for s in all_swaths:
-            d_min = min(math.hypot(base_utm[0] - p[0], base_utm[1] - p[1]) for p in s)
-            swaths_with_dist.append((d_min, s))
-        swaths_with_dist.sort(key=lambda x: x[0])
-        ordered_swaths = [s for _, s in swaths_with_dist]
+        # Минимизация Makespan: балансировка времени выполнения миссии с непрерывным пространственным разделением
+        # Связно упорядочиваем галсы в порядке удаления от базы (без разрыва параллельности)
+        dist_to_first = min(math.hypot(base_utm[0] - p[0], base_utm[1] - p[1]) for p in all_swaths[0])
+        dist_to_last = min(math.hypot(base_utm[0] - p[0], base_utm[1] - p[1]) for p in all_swaths[-1])
+        if dist_to_first <= dist_to_last:
+            ordered_swaths = list(all_swaths)
+        else:
+            ordered_swaths = list(reversed(all_swaths))
 
         # 2. Сортируем дроны: мультироторы (Gemini) берут ближнюю зону, самолеты (201) берут дальнюю зону
         sorted_drones = sorted(
@@ -1098,6 +1210,7 @@ def _plan_mission_candidate(
             drone_assignments = [(sorted_drones[0], ordered_swaths)]
         elif num_d == 2:
             d1, d2 = sorted_drones[0], sorted_drones[1]
+            swap_s = battery_swap_penalty_min * 60.0
             best_split = max(1, int(num_s * (d1.cruise_speed / (d1.cruise_speed + d2.cruise_speed))))
             best_makespan = 1e9
             
@@ -1106,8 +1219,8 @@ def _plan_mission_candidate(
                     continue
                 s1 = ordered_swaths[:split]
                 s2 = ordered_swaths[split:]
-                t1 = quick_estimate_drone_mission_time(s1, d1, base_utm, wind)
-                t2 = quick_estimate_drone_mission_time(s2, d2, base_utm, wind)
+                t1 = quick_estimate_drone_total_makespan(s1, d1, base_utm, wind, swap_s)
+                t2 = quick_estimate_drone_total_makespan(s2, d2, base_utm, wind, swap_s)
                 mspan = max(t1, t2)
                 if mspan < best_makespan:
                     best_makespan = mspan
@@ -1118,13 +1231,18 @@ def _plan_mission_candidate(
                 (d2, ordered_swaths[best_split:])
             ]
         else:
-            total_speed = sum(d.cruise_speed for d in sorted_drones)
+            # Взвешивание с учетом располагаемой энергии каждого борта
+            weights = []
+            for d in sorted_drones:
+                safe_s = 60.0 * d.max_flight_time_min * max(0.0, d.battery_level - d.reserve_battery_pct) / 100.0
+                weights.append(max(1.0, d.cruise_speed * math.sqrt(max(60.0, safe_s))))
+            total_weight = sum(weights)
             cur = 0
             for i, d in enumerate(sorted_drones):
                 if i == len(sorted_drones) - 1:
                     chunk = ordered_swaths[cur:]
                 else:
-                    share = max(1, int(round(num_s * (d.cruise_speed / total_speed))))
+                    share = max(1, int(round(num_s * (weights[i] / total_weight))))
                     end_idx = min(num_s, cur + share)
                     chunk = ordered_swaths[cur:end_idx]
                     cur = end_idx
@@ -1421,6 +1539,114 @@ def _plan_mission_candidate(
             "status": "Норма"
         }
         
+        # Расчет полноценной аварийной посадки на резервную площадку (Non-fictional Emergency Diversion)
+        emergency_diversion = None
+        emergency_pads = [point for point in (launch_points or []) if point.type == "emergency_pad"]
+        if emergency_pads:
+            nearest_pad = min(
+                emergency_pads,
+                key=lambda pad: math.hypot(to_utm(pad.lon, pad.lat)[0] - last_p_end[0],
+                                           to_utm(pad.lon, pad.lat)[1] - last_p_end[1])
+            )
+            pad_utm = to_utm(nearest_pad.lon, nearest_pad.lat)
+            leg_emerg = calculate_flight_leg_utm(
+                last_p_end, pad_utm, drone.cruise_speed,
+                wind.speed_ms, wind.direction_deg, drone.type, drone.max_flight_time_min
+            )
+            
+            # 1. Расчет критической точки возврата (PSR - Point of Safe Return)
+            psr_idx = len(waypoints) - 1
+            psr_coord = [waypoints[-1]["lon"], waypoints[-1]["lat"]]
+            for wp_i, wp_dict in enumerate(waypoints):
+                t_wp = waypoint_times_s[wp_i] if wp_i < len(waypoint_times_s) else flight_time_s
+                used_bat = (t_wp / (drone.max_flight_time_min * 60.0)) * 100.0
+                cur_bat = max(0.0, drone.battery_level - used_bat)
+                wp_u = to_utm(wp_dict["lon"], wp_dict["lat"])
+                ret_cost = calculate_flight_leg_utm(
+                    wp_u, base_utm, drone.cruise_speed,
+                    wind.speed_ms, wind.direction_deg, drone.type, drone.max_flight_time_min
+                )
+                if cur_bat < ret_cost["battery_used_pct"] + drone.reserve_battery_pct:
+                    psr_idx = max(0, wp_i - 1)
+                    psr_coord = [waypoints[psr_idx]["lon"], waypoints[psr_idx]["lat"]]
+                    break
+
+            # 2. Построение эшелонированного прямого захода на аварийную ВПП / площадку
+            breakoff_wgs = list(to_wgs(last_p_end[0], last_p_end[1]))
+            dx = pad_utm[0] - last_p_end[0]
+            dy = pad_utm[1] - last_p_end[1]
+            dist_pad = math.hypot(dx, dy)
+            u_dir = (dx / dist_pad, dy / dist_pad) if dist_pad > 1.0 else (0.0, 1.0)
+            
+            if drone.type == "fixed_wing":
+                # Самолет: прямой посадочный коридор к резервной ВПП со снижением и выбросом парашюта
+                drift_time_s = 9.0  # снижение на парашюте с H=40м со скоростью ~4.5 м/с
+                drift_offset_m = wind.speed_ms * drift_time_s
+                
+                # Точка начала снижения и торможения перед ВПП (IAF)
+                d_iaf = min(160.0, max(40.0, dist_pad * 0.35))
+                iaf_utm = (pad_utm[0] - u_dir[0] * d_iaf, pad_utm[1] - u_dir[1] * d_iaf)
+                
+                # Точка глушения тяги и выброса парашюта на глиссаде
+                d_deploy = min(45.0, max(15.0, dist_pad * 0.12))
+                deploy_utm = (pad_utm[0] - u_dir[0] * d_deploy, pad_utm[1] - u_dir[1] * d_deploy)
+                
+                iaf_wgs = list(to_wgs(iaf_utm[0], iaf_utm[1]))
+                deploy_wgs = list(to_wgs(deploy_utm[0], deploy_utm[1]))
+                
+                landing_desc = (
+                    f"Прямой аварийный сход на резервную ВПП. Снижение до 50м на рубеже захода ({round(d_iaf)}м до ВПП), "
+                    f"глушение двигателя и раскрытие парашюта на H=40м (ожидаемый ветровой снос {drift_offset_m:.1f}м)."
+                )
+                emerg_wps = [
+                    {"lon": round(breakoff_wgs[0], 6), "lat": round(breakoff_wgs[1], 6), "alt_m": round(flight_height_m, 1), "speed_ms": drone.cruise_speed, "stage": "EMERGENCY_DIVERSION", "action": "BREAKOFF_TRANSIT"},
+                    {"lon": round(iaf_wgs[0], 6), "lat": round(iaf_wgs[1], 6), "alt_m": 50.0, "speed_ms": drone.min_speed, "stage": "APPROACH_IAF", "action": "DECELERATE_ALIGN"},
+                    {"lon": round(deploy_wgs[0], 6), "lat": round(deploy_wgs[1], 6), "alt_m": 40.0, "speed_ms": drone.min_speed, "stage": "PARACHUTE_DEPLOY", "action": "CUT_ENGINE_DEPLOY"},
+                    {"lon": round(nearest_pad.lon, 6), "lat": round(nearest_pad.lat, 6), "alt_m": 0.0, "speed_ms": 0.0, "stage": "LANDING", "action": "TOUCHDOWN_PARACHUTE"}
+                ]
+            else:
+                # Коптер (VTOL): пологая глиссада снижения и вертикальное касание
+                d_iaf = min(70.0, max(25.0, dist_pad * 0.3))
+                d_hover = min(18.0, max(8.0, dist_pad * 0.08))
+                
+                iaf_utm = (pad_utm[0] - u_dir[0] * d_iaf, pad_utm[1] - u_dir[1] * d_iaf)
+                hover_utm = (pad_utm[0] - u_dir[0] * d_hover, pad_utm[1] - u_dir[1] * d_hover)
+                
+                iaf_wgs = list(to_wgs(iaf_utm[0], iaf_utm[1]))
+                hover_wgs = list(to_wgs(hover_utm[0], hover_utm[1]))
+                
+                landing_desc = f"Пологая глиссада с высоты {flight_height_m:.1f}м до 12м над площадкой, зависание и вертикальная посадка VTOL."
+                emerg_wps = [
+                    {"lon": round(breakoff_wgs[0], 6), "lat": round(breakoff_wgs[1], 6), "alt_m": round(flight_height_m, 1), "speed_ms": drone.cruise_speed, "stage": "EMERGENCY_DIVERSION", "action": "BREAKOFF_TRANSIT"},
+                    {"lon": round(iaf_wgs[0], 6), "lat": round(iaf_wgs[1], 6), "alt_m": 25.0, "speed_ms": 6.0, "stage": "APPROACH_IAF", "action": "DECELERATE_GLIDE"},
+                    {"lon": round(hover_wgs[0], 6), "lat": round(hover_wgs[1], 6), "alt_m": 12.0, "speed_ms": 3.0, "stage": "FINAL_HOVER", "action": "VTOL_DESCENT"},
+                    {"lon": round(nearest_pad.lon, 6), "lat": round(nearest_pad.lat, 6), "alt_m": 0.0, "speed_ms": 0.0, "stage": "LANDING", "action": "TOUCHDOWN_VTOL"}
+                ]
+
+            emerg_coords = [[wp["lon"], wp["lat"], wp["alt_m"]] for wp in emerg_wps]
+
+            emergency_diversion = {
+                "pad_id": nearest_pad.id,
+                "pad_name": nearest_pad.name,
+                "lon": nearest_pad.lon,
+                "lat": nearest_pad.lat,
+                "distance_km": round(leg_emerg["distance_m"] / 1000.0, 2),
+                "flight_time_min": round(leg_emerg["time_s"] / 60.0, 1),
+                "battery_needed_pct": round(leg_emerg["battery_used_pct"], 1),
+                "landing_procedure": landing_desc,
+                "psr_info": {
+                    "waypoint_index": psr_idx,
+                    "lon": round(psr_coord[0], 6),
+                    "lat": round(psr_coord[1], 6),
+                    "description": f"Точка безопасного возврата (PSR, WP {psr_idx + 1})"
+                },
+                "waypoints": emerg_wps,
+                "geojson_linestring": {
+                    "type": "LineString",
+                    "coordinates": emerg_coords
+                }
+            }
+
         plan_item = {
             "drone_id": drone.id,
             "drone_name": drone.name,
@@ -1438,6 +1664,7 @@ def _plan_mission_candidate(
             "battery_remaining_pct": rem_battery,
             "is_energy_safe": is_safe,
             "maintenance_info": maintenance_info,
+            "emergency_diversion": emergency_diversion,
             "waypoints": waypoints,
             "waypoint_times_s": waypoint_times_s,
             "geojson_linestring": {
@@ -1653,13 +1880,7 @@ def plan_multi_uav_mission(
                     continue
                 if angle is None:
                     auto_angle_by_drone[angle_key] = result["metrics"]["optimal_sweep_angle_deg"]
-                if split is None and len(subset) == 2 and angle_index == 0:
-                    count = result["metrics"]["total_swaths"]
-                    if 2 <= count <= 8:
-                        splits.extend(range(1, count))
-                    elif count <= 60:
-                        splits.extend(sorted({max(1, min(count - 1, round(count * q)))
-                                              for q in (0.2, 0.4, 0.6, 0.8)}))
+                # Оптимальный split для двух дронов уже аналитически вычислен внутри _plan_mission_candidate
                 violation = _candidate_violation(
                     result, obstacles, airspace_zones, avoid_nfz, allowed_airspace_geojson
                 )

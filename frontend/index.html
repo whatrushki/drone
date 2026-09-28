@@ -31,6 +31,7 @@
     </div>
 
     <div class="nav-status-pills">
+      <span class="status-pill" id="apiStatusPill" title="Кликните для настройки адреса бэкенда" style="cursor:pointer;">● API: проверка...</span>
       <span class="status-pill" id="datasetStats">613 полигонов • 341 зона</span>
       <span class="status-pill highlight">Ограничения проверяются</span>
       <span class="status-pill">WGS-84 / UTM</span>
@@ -193,7 +194,14 @@
                 <span class="pill-tag tag-wing">КРЫЛО / САМОЛЕТ</span>
               </div>
               <div class="drone-desc">75 км/ч • Виражи Дубинса (85м) • Парашют • H ≥ 90м</div>
-              <div class="drone-battery-pill">Батарея: 100% (до 180 мин) • ТО: каждые 80 полетов</div>
+              <div class="drone-battery-pill" style="display:flex; flex-direction:column; gap:4px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>Заряд АКБ перед вылетом:</span>
+                  <strong class="battery-val" id="battery_val_201">100%</strong>
+                </div>
+                <input type="range" class="styled-range drone-battery-range" id="battery_201" min="30" max="100" step="5" value="100">
+                <span style="font-size:10px; color:var(--color-stone);">ТО: каждые 80 полетов</span>
+              </div>
             </div>
           </label>
 
@@ -205,7 +213,14 @@
                 <span class="pill-tag tag-vtol">КОПТЕР</span>
               </div>
               <div class="drone-desc">50 км/ч • Точная АФС • VTOL • H ≥ 30м</div>
-              <div class="drone-battery-pill">Батарея: 100% (до 45 мин) • ТО: каждые 120 ч</div>
+              <div class="drone-battery-pill" style="display:flex; flex-direction:column; gap:4px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>Заряд АКБ перед вылетом:</span>
+                  <strong class="battery-val" id="battery_val_gemini">100%</strong>
+                </div>
+                <input type="range" class="styled-range drone-battery-range" id="battery_gemini" min="30" max="100" step="5" value="100">
+                <span style="font-size:10px; color:var(--color-stone);">ТО: каждые 120 ч</span>
+              </div>
             </div>
           </label>
 
@@ -217,7 +232,14 @@
                 <span class="pill-tag tag-heavy">ТЯЖЕЛЫЙ БВС</span>
               </div>
               <div class="drone-desc">43 км/ч • LiDAR / Геофизика • VTOL • H ≥ 25м</div>
-              <div class="drone-battery-pill">Батарея: 100% (до 40 мин) • ТО: каждые 160 ч</div>
+              <div class="drone-battery-pill" style="display:flex; flex-direction:column; gap:4px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>Заряд АКБ перед вылетом:</span>
+                  <strong class="battery-val" id="battery_val_801">100%</strong>
+                </div>
+                <input type="range" class="styled-range drone-battery-range" id="battery_801" min="30" max="100" step="5" value="100">
+                <span style="font-size:10px; color:var(--color-stone);">ТО: каждые 160 ч</span>
+              </div>
             </div>
           </label>
 
@@ -392,13 +414,17 @@
         <button class="btn btn-ghost" id="btnExportKml">Экспорт KML</button>
         <button class="btn btn-ghost" id="btnExportGeoJson">GeoJSON</button>
         <button class="btn btn-ghost btn-plan" id="btnExportPlan">.plan (QGC/Geoscan)</button>
+        <button class="btn btn-ghost btn-plan" id="btnExportEmergPlan" style="display:none; color: #dc2626; border-color: rgba(220, 38, 38, 0.3);">🚨 План схода (.plan)</button>
       </div>
     </div>
 
     <div class="comparison-section" id="comparisonSection" hidden>
       <div class="comparison-title">Сравнение критериев на одних входных данных <span id="comparisonNote"></span></div>
       <div class="comparison-grid" id="comparisonGrid"></div>
-      <label class="comparison-overlay-control"><input type="checkbox" id="showAlternativeRoute"> Показать альтернативный маршрут пунктиром</label>
+      <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <label class="comparison-overlay-control"><input type="checkbox" id="showAlternativeRoute"> Показать альтернативный маршрут пунктиром</label>
+        <label class="comparison-overlay-control" id="emergOverlayLabel" style="display:none;"><input type="checkbox" id="showEmergencyRoute"> 🚨 Аварийный сход на резервную площадку</label>
+      </div>
     </div>
 
     <!-- БЛОК ТЭО И АНАЛИТИКИ ЭКСПЕРТА (ОТВЕТ НА ТРЕБОВАНИЯ ГЕОСКАНА) -->

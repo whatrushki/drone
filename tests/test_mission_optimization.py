@@ -1,4 +1,5 @@
 import unittest
+import math
 import io
 import json
 import zipfile
@@ -208,6 +209,113 @@ class MissionOptimizationTests(unittest.TestCase):
         })
         self.assertEqual(limited.status_code, 422)
 
+    def test_battery_level_and_emergency_diversion(self):
+        polygon = {"type": "Polygon", "coordinates": [[
+            [37.0, 55.0], [37.006, 55.0], [37.006, 55.006],
+            [37.0, 55.006], [37.0, 55.0],
+        ]]}
+        response = self.client.post("/api/plan-mission", json={
+            "polygon_geojson": polygon,
+            "available_drones": ["geoscan_201"],
+            "drone_battery_levels": {"geoscan_201": 70.0},
+            "launch_points": [
+                {"id": "base_main", "name": "ВПП Основная", "lat": 55.0, "lon": 37.0, "type": "base"},
+                {"id": "pad_emerg", "name": "Площадка Резерв", "lat": 55.005, "lon": 37.007, "type": "emergency_pad"},
+            ],
+            "avoid_nfz": False,
+        })
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        plan = data["drone_plans"][0]
+        # Проверяем, что начальный заряд отразился в остатке батареи
+        self.assertLessEqual(plan["battery_remaining_pct"], 70.0)
+        # Проверяем наличие расчета аварийного схода на резервную площадку
+        emerg = plan.get("emergency_diversion")
+        self.assertIsNotNone(emerg)
+        self.assertEqual(emerg["pad_id"], "pad_emerg")
+        self.assertGreater(emerg["distance_km"], 0.0)
+        self.assertIn("landing_procedure", emerg)
+        self.assertIn("psr_info", emerg)
+        self.assertGreaterEqual(len(emerg["waypoints"]), 3)
+
+    def test_low_battery_drone_utilization_in_makespan(self):
+        """Проверяем, что при 40% батареи дрон не отбраковывается, а задействуется с меньшей долей галсов."""
+        polygon = {
+            "type": "Polygon",
+            "coordinates": [[[38.65, 54.85], [38.67, 54.85], [38.67, 54.86], [38.65, 54.86], [38.65, 54.85]]]
+        }
+        res = self.client.post("/api/plan-mission", json={
+            "polygon_geojson": polygon,
+            "sensor_id": "sony_rx1r2",
+            "available_drones": ["geoscan_201", "geoscan_gemini"],
+            "drone_battery_levels": {"geoscan_gemini": 40.0, "geoscan_201": 100.0},
+            "optimization_criterion": "min_makespan",
+            "avoid_nfz": False,
+            "avoid_obstacles": False
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        # Оба дрона должны быть подняты в воздух (параллельный флот)
+        self.assertEqual(data["metrics"]["active_drones_count"], 2)
+        plans_by_drone = {p["drone_id"]: p for p in data["drone_plans"]}
+        self.assertIn("geoscan_gemini", plans_by_drone)
+        self.assertIn("geoscan_201", plans_by_drone)
+        # Gemini с 40% получает меньше галсов, чем Geoscan 201 с 100%
+        self.assertLess(plans_by_drone["geoscan_gemini"]["swaths_count"], plans_by_drone["geoscan_201"]["swaths_count"])
+
+    def test_qgc_export_params_has_no_null(self):
+        plan = self.plan(2190, "min_flight_time").json()["drone_plans"][0]
+        qgc_res = self.client.post("/api/export/qgc", json=plan)
+        self.assertEqual(qgc_res.status_code, 200)
+        qgc_json = json.loads(qgc_res.content)
+        for item in qgc_json["mission"]["items"]:
+            for p in item["params"]:
+                self.assertIsNotNone(p, "QGC params array must not contain None/null values")
+
+    def test_fixed_wing_turns_and_emergency_path_smoothness(self):
+        """Проверяем отсутствие резких изломов в виражах разворота самолета и прямолинейность аварийного схода."""
+        parcel = self.client.get("/api/parcels/1843").json()
+        res = self.client.post("/api/plan-mission", json={
+            "polygon_geojson": parcel,
+            "available_drones": ["geoscan_201"],
+            "optimization_criterion": "min_makespan",
+            "target_gsd_cm": 3.0,
+            "wind_speed_ms": 6.0,
+            "wind_direction_deg": 135.0
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        dp = data["drone_plans"][0]
+        
+        # 1. Проверка углов в точках поворота Дубинса
+        wps = dp["waypoints"]
+        coords = [(w["lon"], w["lat"]) for w in wps]
+        for i in range(1, len(coords) - 1):
+            if wps[i].get("stage") == "TURN_DUBINS":
+                p0, p1, p2 = coords[i-1], coords[i], coords[i+1]
+                v1 = (p1[0] - p0[0], p1[1] - p0[1])
+                v2 = (p2[0] - p1[0], p2[1] - p1[1])
+                m1, m2 = math.hypot(*v1), math.hypot(*v2)
+                if m1 > 1e-6 and m2 > 1e-6:
+                    dot = max(-1.0, min(1.0, (v1[0]*v2[0] + v1[1]*v2[1]) / (m1 * m2)))
+                    angle = math.degrees(math.acos(dot))
+                    self.assertLessEqual(angle, 45.0, f"Вираж самолета имеет резкий излом {angle:.1f}° в WP {i}")
+                    
+        # 2. Проверка аварийного схода: строгий створ и отсутствие зигзагов
+        em = dp.get("emergency_diversion")
+        self.assertIsNotNone(em, "План должен содержать резервный сход")
+        ecoords = [(w["lon"], w["lat"]) for w in em["waypoints"]]
+        for i in range(1, len(ecoords) - 1):
+            p0, p1, p2 = ecoords[i-1], ecoords[i], ecoords[i+1]
+            v1 = (p1[0] - p0[0], p1[1] - p0[1])
+            v2 = (p2[0] - p1[0], p2[1] - p1[1])
+            m1, m2 = math.hypot(*v1), math.hypot(*v2)
+            if m1 > 1e-6 and m2 > 1e-6:
+                dot = max(-1.0, min(1.0, (v1[0]*v2[0] + v1[1]*v2[1]) / (m1 * m2)))
+                angle = math.degrees(math.acos(dot))
+                self.assertLessEqual(angle, 1.0, f"Аварийный сход должен быть прямым коридором, но угол в WP {i} = {angle:.1f}°")
+
 
 if __name__ == "__main__":
     unittest.main()
+
